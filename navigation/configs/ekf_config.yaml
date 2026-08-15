@@ -1,0 +1,23 @@
+# 15-State Extended Kalman Filter (EKF) Noise Covariances
+ekf:
+  update_rate_hz: 100
+
+  # Initial State Uncertainty (P0)
+  initial_covariance:
+    position_std: 0.1       # meters
+    velocity_std: 0.1       # m/s
+    orientation_std: 0.05   # radians
+    accel_bias_std: 0.01    # m/s^2
+    gyro_bias_std: 0.001    # rad/s
+
+  # Process Noise (Q)
+  process_noise:
+    accel_noise_density: 0.02    # m/s^2 / sqrt(Hz)
+    gyro_noise_density: 0.002    # rad/s / sqrt(Hz)
+    accel_random_walk: 0.0005     # m/s^3 / sqrt(Hz)
+    gyro_random_walk: 0.00005     # rad/s^2 / sqrt(Hz)
+
+  # Measurement Noise (R)
+  measurement_noise:
+    vo_position_std: 0.05    # meters
+    vo_orientation_std: 0.02 # radians

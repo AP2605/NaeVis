@@ -1,0 +1,73 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Python distribution / packaging
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Datasets & Heavy Export Folders (Crucial: Keep repository light)
+navigation/datasets/
+datasets/
+data/
+outputs/
+navigation/outputs/*
+!navigation/outputs/.gitkeep
+
+# Exported simulation images and heavy log files
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.avi
+*.bag
+*.csv
+*.pcd
+*.ply
+
+# Exception: keep images in documentation if any
+!docs/**/*.png
+!docs/**/*.jpg
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp

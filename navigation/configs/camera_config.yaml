@@ -1,0 +1,23 @@
+# Camera Intrinsics and Calibration Parameters (Blender 720p HD Drone Spec)
+camera:
+  name: "blender_drone_cam"
+  image_width: 1280
+  image_height: 720
+  rate_hz: 30
+
+  # Camera Matrix K: [fx, 0, cx; 0, fy, cy; 0, 0, 1]
+  # For 1280x720 @ ~77 deg Horizontal FOV: fx = fy = 800.0, cx = 640.0, cy = 360.0
+  fx: 800.0
+  fy: 800.0
+  cx: 640.0
+  cy: 360.0
+
+  # Ideal pinhole camera in Blender simulation has zero lens distortion
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0]
+
+orb_parameters:
+  n_features: 2000
+  scale_factor: 1.2
+  n_levels: 8
+  ini_th_fast: 12
+  min_th_fast: 7
