@@ -4,15 +4,25 @@ Backend service for GPS-denied autonomous drone navigation simulation,
 providing telemetry ingestion, real-time streaming, and system integration.
 """
 
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.telemetry import router as telemetry_router
+from app.config import settings
+from app.websocket.telemetry import router as websocket_router
+
+# Configure root logger
+logging.basicConfig(
+    level=settings.LOG_LEVEL,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("sih_navis")
 
 app = FastAPI(
-    title="SIH-NAVIS Backend",
-    description="Backend service for the SIH-NAVIS GPS-denied autonomous drone navigation simulation system.",
-    version="0.1.0",
+    title=settings.APP_NAME,
+    description=settings.APP_DESCRIPTION,
+    version=settings.APP_VERSION,
 )
 
 # Enable CORS for frontend integration
@@ -26,6 +36,7 @@ app.add_middleware(
 
 # Register routers
 app.include_router(telemetry_router)
+app.include_router(websocket_router)
 
 
 @app.get(
@@ -38,7 +49,7 @@ def read_root():
     return {
         "system": "SIH-NAVIS",
         "status": "online",
-        "version": "0.1.0",
+        "version": settings.APP_VERSION,
     }
 
 

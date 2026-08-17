@@ -1,6 +1,6 @@
-# SIH-NAVIS — P4 Backend (Milestone 1)
+# SIH-NAVIS — P4 Backend (Milestones 1 & 2)
 
-Backend service for the **SIH-NAVIS** GPS-denied autonomous drone navigation simulation system. It provides telemetry ingestion, mock simulation generators, and REST API endpoints for downstream frontend visualization and module integration.
+Backend service for the **SIH-NAVIS** GPS-denied autonomous drone navigation simulation system. It provides real-time telemetry streaming over WebSockets, REST API endpoints, mock simulation data generation, and module integration abstraction.
 
 ---
 
@@ -48,7 +48,9 @@ uvicorn app.main:app --reload --port 8000
 
 ---
 
-## 5. Available Endpoints
+## 5. Endpoints & Real-Time Communication
+
+### REST Endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -56,21 +58,58 @@ uvicorn app.main:app --reload --port 8000
 | `GET` | `/health` | Health check probe (`{"status": "healthy"}`) |
 | `GET` | `/telemetry` | Current estimated drone pose and telemetry |
 
+### WebSocket Endpoint
+
+| Protocol | Path | Description |
+|---|---|---|
+| `WS` | `/ws/telemetry` | Continuous real-time telemetry stream (10 Hz by default) |
+
+#### WebSocket Event Format
+
+```json
+{
+  "event": "telemetry",
+  "timestamp": "2026-08-17T12:49:04.549278Z",
+  "data": {
+    "x": 0.152,
+    "y": 0.285,
+    "z": 9.965,
+    "velocity": 2.65,
+    "roll": 0.58,
+    "pitch": 2.85,
+    "yaw": 0.94,
+    "confidence": 0.95,
+    "timestamp": "2026-08-17T12:49:04.549278Z"
+  }
+}
+```
+
 ---
 
-## 6. Interactive API Documentation
+## 6. Configuration
 
-Once the server is running, explore and test the endpoints interactively:
+Settings are managed in `app/config.py` with environment variable overrides:
+
+| Variable | Default | Description |
+|---|---|---|
+| `TELEMETRY_STREAM_INTERVAL` | `0.1` | Stream interval in seconds (0.1s = 100ms = 10 Hz) |
+| `LOG_LEVEL` | `INFO` | Application log level |
+
+---
+
+## 7. Interactive API Documentation
+
+Once the server is running:
 
 - **Swagger UI**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 - **ReDoc**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
 
 ---
 
-## 7. Running Tests
+## 8. Running Tests
 
-Run the test suite with `pytest`:
+Execute the complete test suite with `pytest`:
 
 ```bash
-pytest
+pytest -v
 ```
