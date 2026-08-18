@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "name": "Takeoff Point",
+    "x": 0.0,
+    "y": 0.0,
+    "z": 5.0,
+    "speed_mps": 2.0,
+    "acceptance_radius_m": 0.5
+  },
+  {
+    "id": 2,
+    "name": "Forest Inspection Point",
+    "x": 15.0,
+    "y": 10.0,
+    "z": 6.0,
+    "speed_mps": 3.5,
+    "acceptance_radius_m": 0.8
+  },
+  {
+    "id": 3,
+    "name": "Bridge Overpass",
+    "x": 30.0,
+    "y": 25.0,
+    "z": 7.0,
+    "speed_mps": 3.5,
+    "acceptance_radius_m": 0.8
+  },
+  {
+    "id": 4,
+    "name": "Home Base (Landing)",
+    "x": 0.0,
+    "y": 0.0,
+    "z": 2.0,
+    "speed_mps": 1.5,
+    "acceptance_radius_m": 0.4
+  }
+]

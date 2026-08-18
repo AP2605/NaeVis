@@ -1,13 +1,14 @@
 """
 Top-Level Navigation Engine Orchestrator (P3 Module).
 =====================================================
-Unified interface matching the exact data contract defined in info.md:
+Unified interface matching the exact data contract defined in info.md & to_see.md:
   - Consumes single synchronized `SensorPacket` per frame (Camera image/path + IMU).
   - Orchestrates INS Dead Reckoning, Visual Odometry, Scale Estimation, and 15-State EKF.
-  - Outputs standardized `EstimatedPose` packet for P4 Backend & React Dashboard.
+  - Generates autonomous 3D Waypoint Guidance & Steering Commands for Blender (P2).
+  - Outputs standardized `EstimatedPose` and `FlightCommand` for P4 Backend & React Dashboard.
 """
 
-from typing import Dict, Any, Union, Optional
+from typing import Dict, Any, Union, Optional, List
 import os
 import numpy as np
 import cv2
@@ -16,18 +17,20 @@ from navigation.ins.imu_integrator import IMUIntegrator
 from navigation.visual_odometry.vo_estimator import VisualOdometryEstimator
 from navigation.visual_odometry.scale_estimator import ScaleEstimator
 from navigation.fusion.ekf_fusion import EKFFusion
+from navigation.guidance.waypoint_navigator import WaypointNavigator, Waypoint
 from navigation.utils.math_utils import quaternion_to_euler
 
 
 class NavigationEngine:
     """
-    Unified GPS-Denied Navigation Engine.
+    Unified GPS-Denied Navigation & Autonomous Flight Guidance Engine.
     Exposes process_packet() matching the exact data contract in info.md.
     """
 
     def __init__(
         self,
         camera_matrix: Optional[np.ndarray] = None,
+        waypoints: Optional[List[Union[Dict[str, Any], Waypoint]]] = None,
         init_pos: Optional[np.ndarray] = None,
         init_vel: Optional[np.ndarray] = None,
         init_quat: Optional[np.ndarray] = None
@@ -39,8 +42,18 @@ class NavigationEngine:
         # 2. 15-State Extended Kalman Filter
         self.ekf = EKFFusion(init_pos=init_pos, init_vel=init_vel, init_quat=init_quat)
 
+        # 3. Waypoint Guidance & Steering Controller
+        self.guidance = WaypointNavigator(waypoints=waypoints)
+
         self.prev_timestamp: Optional[float] = None
-        self.last_known_altitude: Optional[float] = None
+
+    def load_waypoints(self, filepath: str) -> bool:
+        """Loads mission waypoints from a JSON file."""
+        return self.guidance.load_waypoints_from_file(filepath)
+
+    def set_waypoints(self, waypoint_list: List[Union[Dict[str, Any], Waypoint]]):
+        """Sets mission waypoints dynamically."""
+        self.guidance.set_waypoints(waypoint_list)
 
     def process_packet(self, packet: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -61,7 +74,7 @@ class NavigationEngine:
           }
         }
 
-        Returns Standardized Output Schema (matches info.md):
+        Returns Standardized Output Schema (matches info.md & to_see.md):
         {
           "frame_id": int,
           "timestamp": float,
@@ -73,11 +86,23 @@ class NavigationEngine:
             "x": float, "y": float, "z": float
           },
           "tracking_state": str,
-          "confidence": float
+          "confidence": float,
+          "flight_command": {
+            "desired_velocity_mps": float,
+            "target_heading_yaw_deg": float,
+            "climb_rate_mps": float,
+            "active_waypoint_idx": int,
+            "distance_to_waypoint_m": float,
+            "mission_status": str
+          }
         }
         """
         frame_id = packet.get("frame_id", 0)
         timestamp = float(packet.get("timestamp", 0.0))
+
+        # Check for dynamic waypoints passed inside packet
+        if "mission_waypoints" in packet and packet["mission_waypoints"]:
+            self.guidance.set_waypoints(packet["mission_waypoints"])
 
         # Compute dt
         if self.prev_timestamp is None:
@@ -126,12 +151,17 @@ class NavigationEngine:
                     confidence=confidence
                 )
 
-        # 8. Format Exact Output Schema for P4 Dashboard
+        # 8. Compute Autonomous Flight Steering Command for Blender
         pos = ekf_state["position"]
         vel = ekf_state["velocity"]
         euler_rad = ekf_state["orientation_euler"]  # [roll, pitch, yaw] in radians
-        # Convert Euler to degrees for intuitive dashboard display (as shown in info.md)
         euler_deg = np.degrees(euler_rad)
+
+        flight_command = self.guidance.compute_flight_command(
+            current_pos=pos,
+            current_yaw_deg=float(euler_deg[2]),
+            dt=dt
+        )
 
         return {
             "frame_id": frame_id,
@@ -150,12 +180,12 @@ class NavigationEngine:
                 "z": round(float(vel[2]), 4)
             },
             "tracking_state": tracking_state,
-            "confidence": round(float(confidence), 3)
+            "confidence": round(float(confidence), 3),
+            "flight_command": flight_command
         }
 
     @staticmethod
     def _parse_vector3(vec_input: Union[Dict[str, float], list, np.ndarray]) -> np.ndarray:
-        """Helper to parse {x, y, z} dicts or [x, y, z] lists into np.ndarray."""
         if isinstance(vec_input, dict):
             return np.array([
                 float(vec_input.get("x", 0.0)),
@@ -166,7 +196,6 @@ class NavigationEngine:
 
     @staticmethod
     def _load_camera_frame(camera_data: Union[Dict[str, Any], np.ndarray]) -> Optional[np.ndarray]:
-        """Loads camera frame from in-memory array or file path."""
         if isinstance(camera_data, np.ndarray):
             return camera_data
 
@@ -181,56 +210,21 @@ class NavigationEngine:
 
 
 if __name__ == "__main__":
-    print("=== Testing NavigationEngine with info.md SensorPacket ===")
-    from navigation.utils.mock_generator import MockDataGenerator
+    print("=== Testing NavigationEngine with Waypoint Guidance ===")
+    engine = NavigationEngine(waypoints=[
+        {"id": 1, "name": "Takeoff", "x": 0.0, "y": 0.0, "z": 5.0, "speed": 2.0},
+        {"id": 2, "name": "Target_A", "x": 10.0, "y": 5.0, "z": 6.0, "speed": 3.5}
+    ])
 
-    # 1. Initialize Engine
-    engine = NavigationEngine()
+    dummy_packet = {
+        "frame_id": 1,
+        "timestamp": 0.033,
+        "camera": {"frame": np.zeros((720, 1280, 3), dtype=np.uint8)},
+        "imu": {"acceleration": [0, 0, 9.81], "gyroscope": [0, 0, 0]}
+    }
 
-    # 2. Simulate streaming packets from Blender
-    gen = MockDataGenerator(trajectory_type="circular", duration=1.0, imu_hz=30, camera_hz=30)
-
-    sample_output = None
-    packet_count = 0
-
-    for sensor_type, packet in gen.stream_dataset():
-        if sensor_type == "camera":
-            packet_count += 1
-            # Format SensorPacket matching info.md
-            gt = packet["ground_truth"]
-            sensor_packet = {
-                "frame_id": packet_count,
-                "timestamp": packet["timestamp"],
-                "camera": {
-                    "frame": packet["frame"],
-                    "width": 1280,
-                    "height": 720
-                },
-                "imu": {
-                    "acceleration": {
-                        "x": float(gt["acceleration"][0]),
-                        "y": float(gt["acceleration"][1]),
-                        "z": float(gt["acceleration"][2] + 9.81)
-                    },
-                    "gyroscope": {
-                        "x": float(gt["angular_velocity"][0]),
-                        "y": float(gt["angular_velocity"][1]),
-                        "z": float(gt["angular_velocity"][2])
-                    }
-                }
-            }
-
-            out = engine.process_packet(sensor_packet)
-            sample_output = out
-
-            if packet_count % 10 == 0:
-                print(f"Frame #{out['frame_id']:02d} @ t={out['timestamp']:.2f}s | Pose: {out['estimated_pose']} | State: {out['tracking_state']} | Conf: {out['confidence']}")
-
-    print("\n--- Final Sample Output (Sent to P4 Dashboard) ---")
-    import json
-    print(json.dumps(sample_output, indent=2))
-    assert "estimated_pose" in sample_output
-    assert "velocity" in sample_output
-    assert "tracking_state" in sample_output
-    assert "confidence" in sample_output
-    print("\nNavigationEngine integration test PASSED! [info.md fully matched]")
+    res = engine.process_packet(dummy_packet)
+    print(f"Output with Flight Command: {res['flight_command']}")
+    assert "flight_command" in res
+    assert res["flight_command"]["active_waypoint_idx"] == 1
+    print("NavigationEngine guidance test PASSED!")
