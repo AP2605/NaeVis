@@ -10,6 +10,7 @@ Unified interface matching the exact data contract defined in info.md & to_see.m
 
 from typing import Dict, Any, Union, Optional, List
 import os
+import time
 import numpy as np
 import cv2
 
@@ -97,6 +98,7 @@ class NavigationEngine:
           }
         }
         """
+        t_start = time.perf_counter()
         frame_id = packet.get("frame_id", 0)
         timestamp = float(packet.get("timestamp", 0.0))
 
@@ -163,6 +165,9 @@ class NavigationEngine:
             dt=dt
         )
 
+        # 9. Measure Processing Time
+        processing_time_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
+
         return {
             "frame_id": frame_id,
             "timestamp": round(timestamp, 4),
@@ -181,6 +186,7 @@ class NavigationEngine:
             },
             "tracking_state": tracking_state,
             "confidence": round(float(confidence), 3),
+            "processing_time_ms": processing_time_ms,
             "flight_command": flight_command
         }
 
