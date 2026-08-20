@@ -1,0 +1,60 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        ops: {
+          bg: "#111315",
+          panel: "#181B1E",
+          subpanel: "#141719",
+          card: "#1D2124",
+          cardElevated: "#23282B",
+          border: "#2E3438",
+          borderLight: "#3C4348",
+          text: "#E8E6DF",
+          textMuted: "#A7AAA5",
+          textDim: "#777C78",
+          accent: "#5FAE9B",
+          accentBg: "rgba(95, 174, 155, 0.12)",
+          success: "#6FAF8A",
+          successBg: "rgba(111, 175, 138, 0.12)",
+          warning: "#D0A85C",
+          warningBg: "rgba(208, 168, 92, 0.12)",
+          critical: "#C86B6B",
+          criticalBg: "rgba(200, 107, 107, 0.12)",
+          info: "#5B9EB0",
+          infoBg: "rgba(91, 158, 176, 0.12)",
+        },
+      },
+      fontFamily: {
+        sans: [
+          "-apple-system",
+          "BlinkMacSystemFont",
+          '"Segoe UI"',
+          "Roboto",
+          "Oxygen",
+          "Ubuntu",
+          "Cantarell",
+          '"Helvetica Neue"',
+          "sans-serif",
+        ],
+        mono: [
+          '"SF Mono"',
+          "ui-monospace",
+          "Menlo",
+          "Monaco",
+          "Consolas",
+          '"Liberation Mono"',
+          '"Courier New"',
+          "monospace",
+        ],
+      },
+    },
+  },
+  plugins: [],
+};

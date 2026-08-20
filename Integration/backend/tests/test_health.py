@@ -21,3 +21,17 @@ def test_health_endpoint():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
+
+
+def test_health_v1_endpoint():
+    """Test GET /api/v1/health returns healthy status."""
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "healthy"}
+
+
+def test_dashboard_endpoint():
+    """Test GET /dashboard returns HTML page."""
+    response = client.get("/dashboard")
+    assert response.status_code == 200
+    assert "SIH-NAVIS" in response.text
