@@ -17,9 +17,9 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
   frameCount,
 }) => {
   return (
-    <div className="bg-ops-panel border border-ops-border rounded-lg overflow-hidden flex flex-col">
+    <div className="bg-ops-panel border border-ops-border rounded-lg overflow-hidden flex flex-col h-full shadow-lg">
       {/* Header */}
-      <div className="px-3.5 py-2.5 bg-ops-card border-b border-ops-border flex items-center justify-between">
+      <div className="px-3.5 py-2.5 bg-ops-card border-b border-ops-border flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <Camera className="w-4 h-4 text-ops-accent" />
           <h2 className="font-semibold text-ops-text text-xs tracking-wider uppercase">
@@ -50,16 +50,16 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
       </div>
 
       {/* Video Display Area */}
-      <div className="relative aspect-[16/10] sm:aspect-video bg-[#0c0d0f] flex items-center justify-center overflow-hidden">
+      <div className="relative flex-1 min-h-0 bg-[#0c0d0f] flex items-center justify-center overflow-hidden p-2">
         {imageSrc ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={imageSrc}
             alt="Live Optical Feed"
-            className="w-full h-full object-contain select-none"
+            className="w-full h-full max-h-full max-w-full object-contain select-none rounded aspect-video"
           />
         ) : (
-          <div className="flex flex-col items-center justify-center gap-2.5 text-ops-textDim p-6 text-center">
+          <div className="flex flex-col items-center justify-center gap-2 text-ops-textDim p-4 text-center">
             <VideoOff className="w-8 h-8 text-ops-textDim stroke-[1.5]" />
             <div className="text-xs font-medium text-ops-textMuted">
               Awaiting Optical Stream (/ws/camera)

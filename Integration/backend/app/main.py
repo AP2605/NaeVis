@@ -10,12 +10,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app.api.analytics import router as analytics_router
 from app.api.health import router as health_router
 from app.api.integration import router as integration_router
+from app.api.missions import router as missions_router
 from app.api.p1 import router as p1_router
 from app.api.p2 import router as p2_router
 from app.api.p3 import router as p3_router
 from app.api.telemetry import router as telemetry_router
+from app.api.trajectory import router as trajectory_router
 from app.config import settings
 from app.websocket.camera import router as camera_websocket_router
 from app.websocket.telemetry import router as telemetry_websocket_router
@@ -49,6 +52,9 @@ app.include_router(p1_router)
 app.include_router(p2_router)
 app.include_router(p3_router)
 app.include_router(integration_router)
+app.include_router(missions_router)
+app.include_router(analytics_router)
+app.include_router(trajectory_router)
 
 # Register WebSocket routers
 app.include_router(telemetry_websocket_router)

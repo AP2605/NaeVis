@@ -34,6 +34,12 @@ class Settings:
     FRAME_SYNC_BUFFER_SIZE: int = int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "500"))
     FRAME_SYNC_TOLERANCE_SEC: float = float(os.getenv("FRAME_SYNC_TOLERANCE_SEC", "0.5"))
 
+    # M4 Additions: Trajectory, Mission & Analytics Settings
+    MAX_TRAJECTORY_POINTS: int = int(os.getenv("MAX_TRAJECTORY_POINTS", "1000"))
+    WAYPOINT_REACHED_THRESHOLD: float = float(os.getenv("WAYPOINT_REACHED_THRESHOLD", "3.0"))
+    ANALYTICS_SAMPLE_LIMIT: int = int(os.getenv("ANALYTICS_SAMPLE_LIMIT", "500"))
+    DATABASE_PATH: str = os.getenv("DATABASE_PATH", "sih_navis.db")
+
     # Logging level
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 

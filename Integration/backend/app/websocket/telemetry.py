@@ -26,6 +26,43 @@ async def websocket_telemetry(websocket: WebSocket) -> None:
     await connection_manager.connect(websocket)
     logger.info("Telemetry stream started for client.")
 
+    # Send initial state snapshot immediately upon connection
+    try:
+        # 1. Telemetry
+        initial_telemetry = integration_service.get_current_telemetry()
+        await connection_manager.send_personal_json(TelemetryEvent(data=initial_telemetry), websocket)
+
+        # 2. Integrated state (embeds latest ground_truth, navigation, and perception)
+        from app.schemas.websocket import IntegratedStateEvent
+        initial_state = integration_service.get_current_integrated_state()
+        await connection_manager.send_personal_json(IntegratedStateEvent(data=initial_state), websocket)
+
+        # 3. Analytics
+        from app.services.analytics_service import analytics_service
+        metrics = analytics_service.compute_metrics()
+        await connection_manager.send_personal_json({
+            "event": "analytics",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": metrics.model_dump(),
+        }, websocket)
+
+        # 6. Active Mission if present
+        from app.services.mission_service import mission_service
+        active_m = mission_service.get_active_mission()
+        if active_m is not None:
+            await connection_manager.send_personal_json({
+                "event": "mission_status",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "mission_id": active_m.mission_id,
+                    "status": active_m.status.value,
+                    "action": "mission_sync",
+                    "mission": active_m.model_dump(),
+                },
+            }, websocket)
+    except Exception as exc:
+        logger.warning("Error transmitting initial WebSocket snapshot: %s", exc)
+
     async def telemetry_streamer() -> None:
         """Stream telemetry events continuously at the configured interval."""
         try:

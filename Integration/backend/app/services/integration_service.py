@@ -45,8 +45,31 @@ class IntegrationService:
         return frame
 
     async def ingest_p2(self, packet: SimulationGroundTruthPacket) -> IntegratedFrame:
-        """Ingest P2 ground truth packet, update synchronizer, and broadcast."""
+        """Ingest P2 ground truth packet, update synchronizer, record trajectory, and broadcast."""
         frame = self.sync.ingest_p2(packet)
+        
+        # Record ground truth point in trajectory repository
+        from app.repositories.trajectory_repository import trajectory_repository
+        from app.schemas.trajectory import TrajectoryPoint
+
+        frame_id = packet.frame_id if packet.frame_id is not None else self.sync._p2_count
+        roll = packet.orientation.roll if packet.orientation else 0.0
+        pitch = packet.orientation.pitch if packet.orientation else 0.0
+        yaw = packet.orientation.yaw if packet.orientation else 0.0
+
+        trajectory_repository.record_ground_truth(
+            TrajectoryPoint(
+                frame_id=frame_id,
+                timestamp=packet.timestamp,
+                x=packet.position.x,
+                y=packet.position.y,
+                z=packet.position.z,
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+            )
+        )
+
         # Broadcast ground truth event to WebSocket clients
         event = GroundTruthEvent(data=packet)
         await connection_manager.broadcast_json(event)
@@ -56,11 +79,50 @@ class IntegrationService:
         return frame
 
     async def ingest_p3(self, packet: NavigationStatePacket) -> IntegratedFrame:
-        """Ingest P3 navigation state packet, update synchronizer, and broadcast."""
+        """Ingest P3 navigation state packet, update synchronizer, trajectory, analytics, and broadcast."""
         frame = self.sync.ingest_p3(packet)
+
+        # Record estimated pose point in trajectory repository
+        from app.repositories.trajectory_repository import trajectory_repository
+        from app.schemas.trajectory import TrajectoryPoint
+        from app.schemas.common import Position3D
+        from app.services.analytics_service import analytics_service
+        from app.services.mission_service import mission_service
+
+        trajectory_repository.record_estimated(
+            TrajectoryPoint(
+                frame_id=packet.frame_id,
+                timestamp=packet.timestamp,
+                x=packet.estimated_pose.x,
+                y=packet.estimated_pose.y,
+                z=packet.estimated_pose.z,
+                roll=packet.estimated_pose.roll,
+                pitch=packet.estimated_pose.pitch,
+                yaw=packet.estimated_pose.yaw,
+            )
+        )
+
+        # Evaluate mission waypoint progress
+        await mission_service.update_pose_and_evaluate_progress(
+            Position3D(
+                x=packet.estimated_pose.x,
+                y=packet.estimated_pose.y,
+                z=packet.estimated_pose.z,
+            )
+        )
+
         # Broadcast navigation event to WebSocket clients
         event = NavigationEvent(data=packet)
         await connection_manager.broadcast_json(event)
+
+        # Broadcast real-time analytics update
+        metrics = analytics_service.compute_metrics()
+        await connection_manager.broadcast_json({
+            "event": "analytics",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": metrics.model_dump(),
+        })
+
         # Broadcast integrated state update
         state = self.sync.get_latest_integrated_state()
         await connection_manager.broadcast_json(IntegratedStateEvent(data=state))

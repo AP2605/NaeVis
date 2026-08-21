@@ -24,6 +24,8 @@ export function useTelemetryWebSocket(wsUrl: string = "ws://localhost:8000/ws/te
   const [groundTruth, setGroundTruth] = useState<SimulationGroundTruthPacket | null>(null);
   const [navigation, setNavigation] = useState<NavigationStatePacket | null>(null);
   const [perception, setPerception] = useState<P1VisionResult | null>(null);
+  const [analytics, setAnalytics] = useState<any | null>(null);
+  const [missionEvent, setMissionEvent] = useState<any | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -68,15 +70,34 @@ export function useTelemetryWebSocket(wsUrl: string = "ws://localhost:8000/ws/te
               if (state.perception) setPerception(state.perception);
             } else if (data.event === "ground_truth") {
               setGroundTruth(data.data);
-              addLog(`Ground truth frame #${data.data.frame_id ?? ""} received`, "event");
+              if (data.data.frame_id && data.data.frame_id % 50 === 0) {
+                addLog(`Ground truth sync frame #${data.data.frame_id}`, "event");
+              }
             } else if (data.event === "navigation") {
               setNavigation(data.data);
-              const confPct = typeof data.data.confidence === "number" ? `${(data.data.confidence * 100).toFixed(0)}%` : "";
-              addLog(`Navigation estimate frame #${data.data.frame_id} (${confPct ? `conf: ${confPct}` : "active"})`, "event");
+              if (data.data.frame_id && data.data.frame_id % 50 === 0) {
+                const confPct = typeof data.data.confidence === "number" ? `${(data.data.confidence * 100).toFixed(0)}%` : "";
+                addLog(`Navigation estimate frame #${data.data.frame_id} (conf: ${confPct || "active"})`, "event");
+              }
             } else if (data.event === "perception") {
               setPerception(data.data);
-              const terrain = data.data.terrain?.terrain_type ?? "analysis";
-              addLog(`Scene analysis frame #${data.data.frame_id} (${terrain})`, "event");
+              if (data.data.frame_id && data.data.frame_id % 50 === 0) {
+                const terrain = data.data.terrain?.terrain_type ?? "analysis";
+                addLog(`Scene analysis frame #${data.data.frame_id} (${terrain})`, "event");
+              }
+            } else if (data.event === "analytics") {
+              setAnalytics(data.data);
+            } else if (data.event === "mission_status") {
+              setMissionEvent(data.data);
+              const action = data.data.action || data.data.status;
+              const shortId = data.data.mission_id ? ` [${data.data.mission_id.substring(0, 8)}]` : "";
+              addLog(`Mission event: ${action}${shortId}`, "info");
+            } else if (data.event === "mission_progress") {
+              setMissionEvent(data.data);
+              const wpNum = (data.data.current_waypoint_index ?? 0) + 1;
+              const totalWp = data.data.total_waypoints ?? 0;
+              const pct = data.data.progress_percentage ?? 0;
+              addLog(`Flight progress: WP ${wpNum}/${totalWp} reached (${pct}%)`, "event");
             }
           } catch (err) {
             // Non-JSON message or pong
@@ -117,6 +138,8 @@ export function useTelemetryWebSocket(wsUrl: string = "ws://localhost:8000/ws/te
     groundTruth,
     navigation,
     perception,
+    analytics,
+    missionEvent,
     logs,
   };
 }

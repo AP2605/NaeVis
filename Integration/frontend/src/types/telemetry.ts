@@ -151,3 +151,114 @@ export interface WebSocketEvent<T = any> {
   timestamp: string;
   data: T;
 }
+
+export type MissionStatusType =
+  | "DRAFT"
+  | "READY"
+  | "UPLOADING"
+  | "ACTIVE"
+  | "PAUSED"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+
+export type WaypointStatusType = "PENDING" | "CURRENT" | "REACHED" | "SKIPPED";
+
+export interface Waypoint {
+  id?: number;
+  waypoint_index: number;
+  x: number;
+  y: number;
+  z: number;
+  status: WaypointStatusType;
+  name?: string;
+}
+
+export interface MissionProgress {
+  mission_id: string;
+  status: MissionStatusType;
+  current_waypoint_index: number;
+  total_waypoints: number;
+  waypoints_completed: number;
+  progress_percentage: number;
+  distance_to_next_waypoint_m?: number;
+  distance_to_destination_m?: number;
+  active: boolean;
+}
+
+export interface Mission {
+  mission_id: string;
+  mission_name: string;
+  source: Position3D;
+  destination: Position3D;
+  waypoints: Waypoint[];
+  coordinate_frame: string;
+  status: MissionStatusType;
+  progress?: MissionProgress;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrajectoryPoint {
+  frame_id: number;
+  timestamp: number;
+  x: number;
+  y: number;
+  z: number;
+  roll?: number;
+  pitch?: number;
+  yaw?: number;
+}
+
+export interface TrajectoryData {
+  mission_id?: string;
+  ground_truth: TrajectoryPoint[];
+  estimated: TrajectoryPoint[];
+  sample_count: number;
+}
+
+export interface LocalizationErrorMetric {
+  current?: number | null;
+  mean?: number | null;
+  rmse?: number | null;
+  maximum?: number | null;
+  dx?: number | null;
+  dy?: number | null;
+  dz?: number | null;
+}
+
+export interface AteMetric {
+  mean?: number | null;
+  rmse?: number | null;
+  maximum?: number | null;
+  sample_count: number;
+}
+
+export interface RpeMetric {
+  mean?: number | null;
+  rmse?: number | null;
+  sample_count: number;
+}
+
+export interface DriftMetric {
+  absolute_meters?: number | null;
+  percentage?: number | null;
+  traveled_distance_m?: number | null;
+}
+
+export interface OrientationErrorMetric {
+  roll?: number | null;
+  pitch?: number | null;
+  yaw?: number | null;
+}
+
+export interface AnalyticsData {
+  localization_error: LocalizationErrorMetric;
+  ate: AteMetric;
+  rpe: RpeMetric;
+  drift: DriftMetric;
+  orientation_error: OrientationErrorMetric;
+  synchronization_status: string;
+  sample_count: number;
+  timestamp: number;
+}

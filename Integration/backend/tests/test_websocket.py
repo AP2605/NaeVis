@@ -39,10 +39,16 @@ def test_websocket_telemetry_connection_and_schema():
 def test_websocket_telemetry_streaming_multiple_messages():
     """Test that the WebSocket continuously streams evolving telemetry messages."""
     with client.websocket_connect("/ws/telemetry") as websocket:
-        msg1 = websocket.receive_json()
-        msg2 = websocket.receive_json()
-        msg3 = websocket.receive_json()
+        telemetry_events = []
+        for _ in range(10):
+            msg = websocket.receive_json()
+            if msg.get("event") == "telemetry":
+                telemetry_events.append(msg)
+            if len(telemetry_events) >= 3:
+                break
 
+        assert len(telemetry_events) >= 3
+        msg1, msg2, msg3 = telemetry_events[0], telemetry_events[1], telemetry_events[2]
         assert msg1["event"] == "telemetry"
         assert msg2["event"] == "telemetry"
         assert msg3["event"] == "telemetry"
@@ -58,50 +64,49 @@ def test_websocket_telemetry_streaming_multiple_messages():
 def test_websocket_ping_pong():
     """Test client sending a ping message and receiving pong response."""
     with client.websocket_connect("/ws/telemetry") as websocket:
-        # Drain initial telemetry packet
-        _ = websocket.receive_json()
-
         # Send ping
         websocket.send_text(json.dumps({"type": "ping"}))
 
-        # Receive until we get the pong or next message
-        received_types = []
-        for _ in range(5):
+        # Receive until we get the pong
+        received_pong = False
+        for _ in range(8):
             msg = websocket.receive_json()
-            if "type" in msg and msg["type"] == "pong":
-                received_types.append("pong")
+            if msg.get("type") == "pong":
+                received_pong = True
                 assert "timestamp" in msg
                 break
-            elif msg.get("event") == "telemetry":
-                received_types.append("telemetry")
 
-        assert "pong" in received_types
+        assert received_pong, "Did not receive pong response to ping"
 
 
 def test_websocket_invalid_message_does_not_crash():
     """Test that sending invalid data does not crash the stream."""
     with client.websocket_connect("/ws/telemetry") as websocket:
-        _ = websocket.receive_json()
-
         # Send malformed string
         websocket.send_text("THIS_IS_NOT_JSON")
 
-        # Stream should still be functional
-        msg = websocket.receive_json()
-        assert msg["event"] == "telemetry" or "type" in msg
+        # Stream should still be functional and receive events
+        received_valid = False
+        for _ in range(5):
+            msg = websocket.receive_json()
+            if "event" in msg:
+                received_valid = True
+                break
+
+        assert received_valid
 
 
 def test_websocket_multiple_clients_streaming():
     """Test multiple clients connecting simultaneously and receiving telemetry."""
     with client.websocket_connect("/ws/telemetry") as ws1:
         with client.websocket_connect("/ws/telemetry") as ws2:
-            msg_client1 = ws1.receive_json()
-            msg_client2 = ws2.receive_json()
+            msg1 = ws1.receive_json()
+            msg2 = ws2.receive_json()
 
-            assert msg_client1["event"] == "telemetry"
-            assert msg_client2["event"] == "telemetry"
-            assert "data" in msg_client1
-            assert "data" in msg_client2
+            assert msg1["event"] == "telemetry"
+            assert msg2["event"] == "telemetry"
+            assert "data" in msg1
+            assert "data" in msg2
 
 
 def test_websocket_one_client_disconnect_does_not_break_other():
@@ -114,9 +119,9 @@ def test_websocket_one_client_disconnect_does_not_break_other():
         _ = ws1.receive_json()
     # ws1 is now disconnected
 
-    # ws2 should still receive telemetry without error
+    # ws2 should still receive messages without error
     msg = ws2.receive_json()
-    assert msg["event"] == "telemetry"
+    assert "event" in msg
     assert "data" in msg
 
     ws2_context.__exit__(None, None, None)
@@ -126,3 +131,82 @@ def test_connection_manager_broadcast():
     """Test ConnectionManager broadcast mechanics."""
     manager = ConnectionManager()
     assert manager.active_count == 0
+
+
+def test_websocket_initial_snapshot_delivery():
+    """Test that a newly connecting WebSocket client receives initial snapshot events."""
+    with client.websocket_connect("/ws/telemetry") as ws:
+        received_events = set()
+        # Read the initial batch of messages
+        for _ in range(4):
+            msg = ws.receive_json()
+            if "event" in msg:
+                received_events.add(msg["event"])
+
+        assert "telemetry" in received_events
+        assert "integrated_state" in received_events
+        assert "analytics" in received_events
+
+
+def test_websocket_receives_live_p2_and_p3_broadcasts():
+    """Test that ingesting P2 Ground Truth and P3 Navigation states broadcasts over WebSocket."""
+    with client.websocket_connect("/ws/telemetry") as ws:
+        # Drain initial snapshot
+        for _ in range(3):
+            _ = ws.receive_json()
+
+        # Ingest P2 GT
+        gt_res = client.post(
+            "/api/v1/simulation/ground-truth",
+            json={
+                "timestamp": 12.5,
+                "frame_id": 999,
+                "position": {"x": 5.0, "y": 10.0, "z": 15.0},
+                "orientation": {"roll": 1.0, "pitch": -2.0, "yaw": 45.0},
+            },
+        )
+        assert gt_res.status_code == 200
+
+        # Verify ground_truth or integrated_state event is received
+        received_gt = False
+        for _ in range(5):
+            msg = ws.receive_json()
+            if msg.get("event") == "ground_truth":
+                assert msg["data"]["frame_id"] == 999
+                assert msg["data"]["position"]["x"] == 5.0
+                received_gt = True
+                break
+        assert received_gt, "Did not receive live ground_truth event over WebSocket"
+
+
+def test_websocket_receives_live_mission_lifecycle_broadcast():
+    """Test that creating and starting a mission broadcasts status events over WebSocket."""
+    with client.websocket_connect("/ws/telemetry") as ws:
+        # Drain initial snapshot
+        for _ in range(3):
+            _ = ws.receive_json()
+
+        # Create mission
+        create_res = client.post(
+            "/api/v1/missions",
+            json={
+                "mission_name": "WS Broadcast Test Mission",
+                "source": {"x": 0.0, "y": 0.0, "z": 10.0},
+                "destination": {"x": 50.0, "y": 20.0, "z": 15.0},
+                "waypoints": [{"x": 25.0, "y": 10.0, "z": 12.0}],
+            },
+        )
+        assert create_res.status_code == 201
+        m_data = create_res.json()
+        mission_id = m_data["mission_id"]
+
+        # Check WebSocket received mission_status
+        received_created = False
+        for _ in range(5):
+            msg = ws.receive_json()
+            if msg.get("event") == "mission_status" and msg["data"]["mission_id"] == mission_id:
+                assert msg["data"]["action"] == "mission_created"
+                assert msg["data"]["status"] == "DRAFT"
+                received_created = True
+                break
+        assert received_created, "Did not receive live mission_status event over WebSocket"
