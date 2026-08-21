@@ -7,21 +7,19 @@ model directly to P3's Autonomous Navigation Engine in real time.
 Features:
   - Captures camera viewport / renders at 30 FPS.
   - Simulates 6-axis IMU (accelerometer specific force + gyroscope).
-  - Sends synchronized SensorPacket to P3 over zero-dependency HTTP REST (http://<IP>:8765/api/packet).
+  - Sends synchronized SensorPacket to P3 over WebSocket (ws://<IP>:8765/ws/sensors).
   - Receives P3's autonomous flight steering commands and moves the Blender drone model.
 
 How to Use in Blender:
   1. Open your 3D drone scene in Blender.
-  2. Set SERVER_IP to P3's IP address below (e.g. "10.247.227.32" or "localhost").
+  2. Set SERVER_IP to P3's IP below (e.g. "10.247.227.32" or "localhost").
   3. Go to Blender's Scripting workspace, open this file, and click "Run Script" (or Alt+P).
-  4. Press ESC at any time to stop the simulation.
+  4. Press ESC in 3D Viewport to stop.
 """
 
 import math
 import time
 import json
-import urllib.request
-import urllib.error
 
 try:
     import bpy
@@ -31,11 +29,19 @@ except ImportError:
     IN_BLENDER = False
     print("[Connector Info] Running outside Blender (Standalone Mode).")
 
+try:
+    import websocket
+    HAS_WEBSOCKET_CLIENT = True
+except ImportError:
+    HAS_WEBSOCKET_CLIENT = False
+    import urllib.request
+
 # =========================================================================
 # CONFIGURATION — Edit SERVER_IP to match P3's IP
 # =========================================================================
 SERVER_IP = "10.247.227.32"       # <--- Replace with P3's IP (or "localhost")
 SERVER_PORT = 8765
+SERVER_WS_URL = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/sensors"
 SERVER_HTTP_URL = f"http://{SERVER_IP}:{SERVER_PORT}/api/packet"
 
 DRONE_OBJECT_NAME = "Drone"
@@ -56,6 +62,16 @@ class BlenderDroneBridge:
         self.prev_vel = None
         self.prev_time = time.time()
         self.frame_id = 0
+        self.ws = None
+
+    def connect_ws(self):
+        """Attempts to open persistent WebSocket connection to P3 server."""
+        if HAS_WEBSOCKET_CLIENT and self.ws is None:
+            try:
+                self.ws = websocket.create_connection(SERVER_WS_URL, timeout=2.0)
+                print(f"[Blender Bridge] Connected to P3 WebSocket: {SERVER_WS_URL}")
+            except Exception as e:
+                self.ws = None
 
     def get_drone_object(self):
         if not IN_BLENDER:
@@ -141,8 +157,21 @@ class BlenderDroneBridge:
     def send_sensor_packet(self, packet: dict) -> dict:
         """
         Sends sensor packet to P3 Navigation server and receives steering command.
-        Uses built-in urllib (Zero external pip dependencies required).
+        Uses WebSocket if available, with automatic HTTP fallback.
         """
+        # 1. Try WebSocket
+        if HAS_WEBSOCKET_CLIENT:
+            if self.ws is None:
+                self.connect_ws()
+            if self.ws is not None:
+                try:
+                    self.ws.send(json.dumps(packet))
+                    resp = json.loads(self.ws.recv())
+                    return resp.get("flight_command", {})
+                except Exception:
+                    self.ws = None
+
+        # 2. HTTP Fallback
         try:
             req = urllib.request.Request(
                 SERVER_HTTP_URL,
@@ -152,9 +181,7 @@ class BlenderDroneBridge:
             with urllib.request.urlopen(req, timeout=0.5) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
                 return res_data.get("flight_command", {})
-        except Exception as e:
-            if self.frame_id % 30 == 0:
-                print(f"[Blender Bridge] Waiting for P3 Server on {SERVER_HTTP_URL}... ({e})")
+        except Exception:
             return {}
 
     def apply_flight_command(self, flight_cmd: dict):
@@ -173,7 +200,7 @@ class BlenderDroneBridge:
         target_yaw_rad = math.radians(target_yaw_deg)
         current_yaw_rad = drone.rotation_euler.z
         yaw_diff = (target_yaw_rad - current_yaw_rad + math.pi) % (2.0 * math.pi) - math.pi
-        drone.rotation_euler.z += yaw_diff * 0.15  # Smooth turning
+        drone.rotation_euler.z += yaw_diff * 0.15
 
         # 2. Update Position
         active_yaw = drone.rotation_euler.z
@@ -203,7 +230,6 @@ if IN_BLENDER:
             if event.type == 'TIMER':
                 packet, gt = self.bridge.read_telemetry_and_imu()
                 
-                # Send packet to P3 Server and get autonomous steering command
                 flight_cmd = self.bridge.send_sensor_packet(packet)
                 if flight_cmd:
                     self.bridge.apply_flight_command(flight_cmd)
@@ -220,7 +246,8 @@ if IN_BLENDER:
             wm = context.window_manager
             self._timer = wm.event_timer_add(DT, window=context.window)
             wm.modal_handler_add(self)
-            print(f"\n[Navis Blender Bridge] Started simulation loop (Connecting to {SERVER_HTTP_URL}).")
+            self.bridge.connect_ws()
+            print(f"\n[Navis Blender Bridge] Started simulation loop (Connecting to {SERVER_WS_URL}).")
             print("[Navis Blender Bridge] Press ESC in 3D Viewport to stop.\n")
             return {'RUNNING_MODAL'}
 
@@ -228,6 +255,12 @@ if IN_BLENDER:
             wm = context.window_manager
             if self._timer is not None:
                 wm.event_timer_remove(self._timer)
+            if self.bridge.ws is not None:
+                try:
+                    self.bridge.ws.close()
+                except Exception:
+                    pass
+                self.bridge.ws = None
             print("[Navis Blender Bridge] Stopped simulation loop.")
 
 
@@ -255,7 +288,7 @@ if __name__ == "__main__":
         bridge = BlenderDroneBridge()
         pkt, gt = bridge.read_telemetry_and_imu()
         print(f"Generated SensorPacket: {json.dumps(pkt, indent=2)}")
-        print(f"Attempting to connect to: {SERVER_HTTP_URL}")
+        print(f"Testing connection to: {SERVER_WS_URL}")
         cmd = bridge.send_sensor_packet(pkt)
         print(f"Response from P3 Server: {cmd}")
         print("BlenderDroneBridge standalone test complete!")
