@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIH-NAVIS — M3 Integration Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: '#38bdf8',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #070b14; color: #e2e8f0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  </style>
+</head>
+<body class="p-4 md:p-6 max-w-7xl mx-auto flex flex-col gap-5 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-slate-900/90 border border-slate-800 backdrop-blur-md rounded-2xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="p-2.5 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 shadow-md">
+        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-lg font-bold tracking-tight text-white">SIH-NAVIS</h1>
+          <span class="bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 text-[10px] font-mono px-2 py-0.5 rounded-full">
+            M3 Integration Layer
+          </span>
+        </div>
+        <p class="text-xs text-slate-400">GPS-Denied Autonomous Drone Integration Hub (P1 · P2 · P3 → P4)</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-4 font-mono text-xs">
+      <div class="bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+        <span class="text-slate-500 mr-1.5">FRAME:</span>
+        <span id="header-frame" class="font-bold text-sky-400">#0</span>
+      </div>
+      <div class="bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+        <span class="text-slate-500 mr-1.5">TIME:</span>
+        <span id="header-time" class="font-bold text-amber-400">0.00s</span>
+      </div>
+      <div class="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+        <span class="text-slate-500">BACKEND:</span>
+        <span id="backend-status-dot" class="w-2 h-2 rounded-full bg-rose-500"></span>
+        <span id="backend-status-text" class="text-rose-400 font-semibold">CONNECTING</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Grid -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+    
+    <!-- Left Column: Camera + Pose Comparison -->
+    <div class="lg:col-span-7 flex flex-col gap-5">
+      
+      <!-- Camera Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex flex-col">
+        <div class="px-4 py-3 bg-slate-800/80 border-b border-slate-700 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-indigo-400 font-bold">📷</span>
+            <h2 class="font-semibold text-slate-100 text-sm">LIVE SIMULATION CAMERA FEED (P2)</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            <span id="camera-fps" class="text-xs font-mono px-2 py-0.5 rounded bg-slate-950 border border-slate-700 text-emerald-400">0 FPS</span>
+            <span id="camera-frames" class="text-xs font-mono text-slate-400">Frames: 0</span>
+            <span id="camera-status" class="text-xs font-mono text-rose-400">Camera Offline</span>
+          </div>
+        </div>
+
+        <div class="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+          <img id="camera-stream-img" src="" alt="Camera Feed" class="w-full h-full object-contain hidden" />
+          <div id="camera-placeholder" class="flex flex-col items-center justify-center text-slate-500 text-xs gap-2">
+            <svg class="w-8 h-8 text-slate-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+            <span>Waiting for binary camera frames (/ws/camera)...</span>
+          </div>
+          <div class="absolute top-3 left-3 bg-black/60 backdrop-blur-sm border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-emerald-400">
+            RAW BINARY JPEG STREAM
+          </div>
+        </div>
+      </div>
+
+      <!-- Pose Comparison Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col gap-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h2 class="font-semibold text-slate-100 text-sm">STATE COMPARISON: GROUND TRUTH (P2) vs ESTIMATED (P3)</h2>
+          <span id="tracking-badge" class="text-xs px-2.5 py-0.5 rounded-full border font-mono bg-slate-800 text-slate-400">
+            Awaiting P3...
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- P2 -->
+          <div class="bg-slate-950/70 border border-slate-800 rounded-lg p-3 text-xs font-mono">
+            <div class="flex items-center justify-between text-amber-400 font-semibold mb-2">
+              <span>P2 GROUND TRUTH</span>
+              <span id="p2-frame-badge" class="text-slate-500">Frame: --</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2 bg-slate-900/60 p-2 rounded mb-2">
+              <div><span class="text-slate-500 block">X</span><span id="p2-x" class="text-slate-200">--</span></div>
+              <div><span class="text-slate-500 block">Y</span><span id="p2-y" class="text-slate-200">--</span></div>
+              <div><span class="text-slate-500 block">Z</span><span id="p2-z" class="text-slate-200">--</span></div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 bg-slate-900/60 p-2 rounded">
+              <div><span class="text-slate-500 block">Roll</span><span id="p2-roll" class="text-slate-300">--</span></div>
+              <div><span class="text-slate-500 block">Pitch</span><span id="p2-pitch" class="text-slate-300">--</span></div>
+              <div><span class="text-slate-500 block">Yaw</span><span id="p2-yaw" class="text-slate-300">--</span></div>
+            </div>
+          </div>
+
+          <!-- P3 -->
+          <div class="bg-slate-950/70 border border-slate-800 rounded-lg p-3 text-xs font-mono">
+            <div class="flex items-center justify-between text-sky-400 font-semibold mb-2">
+              <span>P3 ESTIMATED (INS/SLAM)</span>
+              <span id="p3-frame-badge" class="text-slate-500">Frame: --</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2 bg-slate-900/60 p-2 rounded mb-2">
+              <div><span class="text-slate-500 block">X</span><span id="p3-x" class="text-slate-200">--</span></div>
+              <div><span class="text-slate-500 block">Y</span><span id="p3-y" class="text-slate-200">--</span></div>
+              <div><span class="text-slate-500 block">Z</span><span id="p3-z" class="text-slate-200">--</span></div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 bg-slate-900/60 p-2 rounded">
+              <div><span class="text-slate-500 block">Roll</span><span id="p3-roll" class="text-slate-300">--</span></div>
+              <div><span class="text-slate-500 block">Pitch</span><span id="p3-pitch" class="text-slate-300">--</span></div>
+              <div><span class="text-slate-500 block">Yaw</span><span id="p3-yaw" class="text-slate-300">--</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-xs font-mono">
+          <div><span class="text-slate-500 block">Pose Delta:</span><span id="pose-delta" class="font-semibold text-amber-300">--</span></div>
+          <div><span class="text-slate-500 block">Confidence:</span><span id="p3-confidence" class="font-semibold text-emerald-400">--</span></div>
+          <div><span class="text-slate-500 block">Velocity:</span><span id="p3-velocity" class="font-semibold text-slate-200">--</span></div>
+          <div><span class="text-slate-500 block">Latency:</span><span id="p3-latency" class="font-semibold text-slate-300">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Telemetry + Perception + Logs -->
+    <div class="lg:col-span-5 flex flex-col gap-5">
+      
+      <!-- Telemetry Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col gap-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h2 class="font-semibold text-slate-100 text-sm">FLIGHT TELEMETRY (/ws/telemetry)</h2>
+          <span id="telemetry-time" class="text-xs font-mono text-slate-400">--:--:--</span>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-500 block text-[10px]">Altitude (Z)</span>
+            <span id="telem-z" class="text-base font-semibold text-emerald-400">--</span>
+          </div>
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-500 block text-[10px]">Speed</span>
+            <span id="telem-vel" class="text-base font-semibold text-sky-400">--</span>
+          </div>
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-500 block text-[10px]">Heading</span>
+            <span id="telem-yaw" class="text-base font-semibold text-amber-400">--</span>
+          </div>
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-500 block text-[10px]">Confidence</span>
+            <span id="telem-conf" class="text-base font-semibold text-purple-400">--</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Perception Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col gap-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h2 class="font-semibold text-slate-100 text-sm">P1 ML / PERCEPTION INFERENCE</h2>
+          <span id="p1-frame-badge" class="text-xs font-mono text-slate-400">Frame: --</span>
+        </div>
+        <div id="p1-content" class="space-y-3 text-xs">
+          <div class="grid grid-cols-2 gap-3">
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+              <span class="text-purple-400 font-medium block mb-1">Classified Terrain</span>
+              <div id="p1-terrain" class="text-sm font-semibold capitalize text-slate-100">Awaiting...</div>
+              <div id="p1-terrain-meta" class="text-[11px] text-slate-400 font-mono">--</div>
+            </div>
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+              <span class="text-indigo-400 font-medium block mb-1">Place Recognition</span>
+              <div id="p1-place" class="text-sm font-semibold text-slate-100">Scanning...</div>
+              <div id="p1-place-score" class="text-[11px] text-slate-400 font-mono">--</div>
+            </div>
+          </div>
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 font-mono text-[11px]">
+            <span class="text-emerald-400 font-medium block mb-1">Landmarks:</span>
+            <div id="p1-landmarks" class="text-slate-400 italic">No landmarks yet</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Event Logs -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col gap-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h2 class="font-semibold text-slate-100 text-sm">LIVE INTEGRATION EVENT LOGS</h2>
+          <span id="sync-rates" class="text-xs font-mono text-slate-400">P1: 0Hz | P2: 0Hz | P3: 0Hz</span>
+        </div>
+        <div id="log-window" class="bg-slate-950 rounded-lg p-3 h-40 overflow-y-auto font-mono text-[11px] space-y-1 border border-slate-800">
+          <div class="text-slate-600">Connecting to WebSocket streams...</div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    // Integration Dashboard Client Logic
+    const loc = window.location;
+    const wsProto = loc.protocol === "https:" ? "wss:" : "ws:";
+    const host = loc.host;
+    const telemWsUrl = `${wsProto}//${host}/ws/telemetry`;
+    const cameraWsUrl = `${wsProto}//${host}/ws/camera?role=viewer`;
+
+    let p2State = null;
+    let p3State = null;
+
+    function addLog(msg, type = "text-slate-300") {
+      const logWin = document.getElementById("log-window");
+      const time = new Date().toLocaleTimeString();
+      const row = document.createElement("div");
+      row.className = "flex gap-2";
+      row.innerHTML = `<span class="text-slate-600 select-none">[${time}]</span><span class="${type}">${msg}</span>`;
+      logWin.prepend(row);
+      while (logWin.children.length > 50) logWin.removeChild(logWin.lastChild);
+    }
+
+    function updatePoseDelta() {
+      if (p2State && p3State && p2State.position && p3State.estimated_pose) {
+        const dx = p2State.position.x - p3State.estimated_pose.x;
+        const dy = p2State.position.y - p3State.estimated_pose.y;
+        const dz = p2State.position.z - p3State.estimated_pose.z;
+        const delta = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        document.getElementById("pose-delta").innerText = `${delta.toFixed(3)} m`;
+      }
+    }
+
+    // Connect Telemetry WebSocket
+    function connectTelemetry() {
+      const ws = new WebSocket(telemWsUrl);
+      ws.onopen = () => {
+        document.getElementById("backend-status-dot").className = "w-2 h-2 rounded-full bg-emerald-500 animate-pulse";
+        document.getElementById("backend-status-text").className = "text-emerald-400 font-semibold";
+        document.getElementById("backend-status-text").innerText = "ONLINE";
+        addLog(`Connected to Telemetry WebSocket (${telemWsUrl})`, "text-emerald-400");
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const packet = JSON.parse(event.data);
+          if (packet.event === "telemetry") {
+            const d = packet.data;
+            document.getElementById("telem-z").innerText = `${d.z.toFixed(2)} m`;
+            document.getElementById("telem-vel").innerText = `${d.velocity.toFixed(2)} m/s`;
+            document.getElementById("telem-yaw").innerText = `${d.yaw.toFixed(1)}°`;
+            document.getElementById("telem-conf").innerText = `${(d.confidence * 100).toFixed(0)}%`;
+            document.getElementById("telemetry-time").innerText = new Date(d.timestamp).toLocaleTimeString();
+          } else if (packet.event === "integrated_state") {
+            const st = packet.data;
+            if (st.current_frame_id) document.getElementById("header-frame").innerText = `#${st.current_frame_id}`;
+            if (st.latest_timestamp) document.getElementById("header-time").innerText = `${st.latest_timestamp.toFixed(2)}s`;
+            if (st.sync_status) {
+              const s = st.sync_status;
+              document.getElementById("sync-rates").innerText = `P1: ${s.p1_rate_hz || 0}Hz | P2: ${s.p2_rate_hz || 0}Hz | P3: ${s.p3_rate_hz || 0}Hz`;
+            }
+          } else if (packet.event === "ground_truth") {
+            p2State = packet.data;
+            document.getElementById("p2-frame-badge").innerText = `Frame: ${p2State.frame_id || '--'}`;
+            document.getElementById("p2-x").innerText = `${p2State.position.x.toFixed(2)} m`;
+            document.getElementById("p2-y").innerText = `${p2State.position.y.toFixed(2)} m`;
+            document.getElementById("p2-z").innerText = `${p2State.position.z.toFixed(2)} m`;
+            document.getElementById("p2-roll").innerText = `${p2State.orientation.roll.toFixed(1)}°`;
+            document.getElementById("p2-pitch").innerText = `${p2State.orientation.pitch.toFixed(1)}°`;
+            document.getElementById("p2-yaw").innerText = `${p2State.orientation.yaw.toFixed(1)}°`;
+            updatePoseDelta();
+          } else if (packet.event === "navigation") {
+            p3State = packet.data;
+            document.getElementById("p3-frame-badge").innerText = `Frame: ${p3State.frame_id}`;
+            document.getElementById("p3-x").innerText = `${p3State.estimated_pose.x.toFixed(2)} m`;
+            document.getElementById("p3-y").innerText = `${p3State.estimated_pose.y.toFixed(2)} m`;
+            document.getElementById("p3-z").innerText = `${p3State.estimated_pose.z.toFixed(2)} m`;
+            document.getElementById("p3-roll").innerText = `${p3State.estimated_pose.roll.toFixed(1)}°`;
+            document.getElementById("p3-pitch").innerText = `${p3State.estimated_pose.pitch.toFixed(1)}°`;
+            document.getElementById("p3-yaw").innerText = `${p3State.estimated_pose.yaw.toFixed(1)}°`;
+            document.getElementById("p3-confidence").innerText = `${(p3State.confidence * 100).toFixed(0)}%`;
+            document.getElementById("tracking-badge").innerText = p3State.tracking_state;
+            document.getElementById("tracking-badge").className = "text-xs px-2.5 py-0.5 rounded-full border font-mono bg-emerald-950 text-emerald-400 border-emerald-700/50";
+            if (p3State.velocity) {
+              const v = Math.sqrt(p3State.velocity.x**2 + p3State.velocity.y**2 + p3State.velocity.z**2);
+              document.getElementById("p3-velocity").innerText = `${v.toFixed(2)} m/s`;
+            }
+            if (p3State.processing_time_ms) {
+              document.getElementById("p3-latency").innerText = `${p3State.processing_time_ms} ms`;
+            }
+            updatePoseDelta();
+          } else if (packet.event === "perception") {
+            const p1 = packet.data;
+            document.getElementById("p1-frame-badge").innerText = `Frame: ${p1.frame_id}`;
+            document.getElementById("p1-terrain").innerText = p1.terrain.terrain_type;
+            document.getElementById("p1-terrain-meta").innerText = `Conf: ${(p1.terrain.confidence * 100).toFixed(0)}% | Roughness: ${p1.terrain.roughness || 0}`;
+            if (p1.place_recognition && p1.place_recognition.match_found) {
+              document.getElementById("p1-place").innerText = p1.place_recognition.location_id;
+              document.getElementById("p1-place-score").innerText = `Match: ${(p1.place_recognition.similarity_score * 100).toFixed(0)}%`;
+            }
+            if (p1.landmarks && p1.landmarks.length > 0) {
+              document.getElementById("p1-landmarks").innerHTML = p1.landmarks.map(l => `<span class="bg-slate-900 px-1.5 py-0.5 rounded text-slate-200 border border-slate-800 mr-1">${l.label}</span>`).join("");
+            }
+            addLog(`[P1] Perception frame ${p1.frame_id} received (${p1.terrain.terrain_type})`, "text-purple-400");
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        document.getElementById("backend-status-dot").className = "w-2 h-2 rounded-full bg-rose-500";
+        document.getElementById("backend-status-text").className = "text-rose-400 font-semibold";
+        document.getElementById("backend-status-text").innerText = "OFFLINE";
+        setTimeout(connectTelemetry, 2000);
+      };
+    }
+
+    // Connect Camera WebSocket
+    let lastCamTime = 0;
+    let camFrames = 0;
+    let prevBlobUrl = null;
+
+    function connectCamera() {
+      const ws = new WebSocket(cameraWsUrl);
+      ws.binaryType = "blob";
+
+      ws.onopen = () => {
+        document.getElementById("camera-status").className = "text-xs font-mono text-emerald-400";
+        document.getElementById("camera-status").innerText = "Camera Live";
+        addLog(`Connected to Camera Stream (${cameraWsUrl})`, "text-indigo-400");
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof Blob) {
+          const now = performance.now();
+          if (lastCamTime > 0) {
+            const dt = (now - lastCamTime) / 1000;
+            if (dt > 0) document.getElementById("camera-fps").innerText = `${Math.round(1.0 / dt)} FPS`;
+          }
+          lastCamTime = now;
+          camFrames++;
+          document.getElementById("camera-frames").innerText = `Frames: ${camFrames}`;
+
+          if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
+          const url = URL.createObjectURL(event.data);
+          prevBlobUrl = url;
+
+          const img = document.getElementById("camera-stream-img");
+          img.src = url;
+          img.classList.remove("hidden");
+          document.getElementById("camera-placeholder").classList.add("hidden");
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById("camera-status").className = "text-xs font-mono text-rose-400";
+        document.getElementById("camera-status").innerText = "Camera Offline";
+        setTimeout(connectCamera, 2000);
+      };
+    }
+
+    connectTelemetry();
+    connectCamera();
+  </script>
+</body>
+</html>

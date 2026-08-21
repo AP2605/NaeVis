@@ -8,7 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
 from app.schemas.websocket import TelemetryEvent
-from app.services.telemetry_service import telemetry_service
+from app.services.integration_service import integration_service
 from app.websocket.manager import connection_manager
 
 logger = logging.getLogger("sih_navis.websocket")
@@ -30,7 +30,7 @@ async def websocket_telemetry(websocket: WebSocket) -> None:
         """Stream telemetry events continuously at the configured interval."""
         try:
             while True:
-                telemetry = telemetry_service.get_current_telemetry()
+                telemetry = integration_service.get_current_telemetry()
                 event = TelemetryEvent(data=telemetry)
                 sent = await connection_manager.send_personal_json(event, websocket)
                 if not sent:

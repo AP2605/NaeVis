@@ -5,6 +5,10 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, Field
 
 from app.schemas.telemetry import Telemetry
+from app.schemas.integrated import IntegratedState
+from app.schemas.p1 import P1VisionResult
+from app.schemas.p2 import SimulationGroundTruthPacket
+from app.schemas.p3 import NavigationStatePacket
 
 T = TypeVar("T")
 
@@ -12,7 +16,7 @@ T = TypeVar("T")
 class WebSocketEvent(BaseModel, Generic[T]):
     """Generic WebSocket event envelope for all real-time events."""
 
-    event: str = Field(..., description="Event type identifier (e.g., 'telemetry')")
+    event: str = Field(..., description="Event type identifier (e.g., 'telemetry', 'integrated_state')")
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC timestamp of the event envelope",
@@ -44,6 +48,30 @@ class TelemetryEvent(WebSocketEvent[Telemetry]):
     """Specialized WebSocket event envelope for telemetry payloads."""
 
     event: str = Field(default="telemetry", description="Event type identifier fixed to 'telemetry'")
+
+
+class IntegratedStateEvent(WebSocketEvent[IntegratedState]):
+    """Specialized WebSocket event envelope for synchronized integrated state."""
+
+    event: str = Field(default="integrated_state", description="Event type identifier fixed to 'integrated_state'")
+
+
+class GroundTruthEvent(WebSocketEvent[SimulationGroundTruthPacket]):
+    """Specialized WebSocket event envelope for simulation ground truth."""
+
+    event: str = Field(default="ground_truth", description="Event type identifier fixed to 'ground_truth'")
+
+
+class NavigationEvent(WebSocketEvent[NavigationStatePacket]):
+    """Specialized WebSocket event envelope for navigation estimations."""
+
+    event: str = Field(default="navigation", description="Event type identifier fixed to 'navigation'")
+
+
+class PerceptionEvent(WebSocketEvent[P1VisionResult]):
+    """Specialized WebSocket event envelope for ML perception results."""
+
+    event: str = Field(default="perception", description="Event type identifier fixed to 'perception'")
 
 
 class WebSocketClientMessage(BaseModel):

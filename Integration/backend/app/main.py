@@ -5,12 +5,20 @@ providing telemetry ingestion, real-time streaming, and system integration.
 """
 
 import logging
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
+from app.api.health import router as health_router
+from app.api.integration import router as integration_router
+from app.api.p1 import router as p1_router
+from app.api.p2 import router as p2_router
+from app.api.p3 import router as p3_router
 from app.api.telemetry import router as telemetry_router
 from app.config import settings
-from app.websocket.telemetry import router as websocket_router
+from app.websocket.camera import router as camera_websocket_router
+from app.websocket.telemetry import router as telemetry_websocket_router
 
 # Configure root logger
 logging.basicConfig(
@@ -34,9 +42,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
+# Register REST routers
+app.include_router(health_router)
 app.include_router(telemetry_router)
-app.include_router(websocket_router)
+app.include_router(p1_router)
+app.include_router(p2_router)
+app.include_router(p3_router)
+app.include_router(integration_router)
+
+# Register WebSocket routers
+app.include_router(telemetry_websocket_router)
+app.include_router(camera_websocket_router)
 
 
 @app.get(
@@ -54,12 +70,14 @@ def read_root():
 
 
 @app.get(
-    "/health",
-    tags=["Health"],
-    summary="Health check",
+    "/dashboard",
+    tags=["Dashboard"],
+    summary="Integration Dashboard UI",
+    include_in_schema=False,
 )
-def read_health():
-    """Health check endpoint to verify backend service liveness."""
-    return {
-        "status": "healthy",
-    }
+def serve_dashboard():
+    """Serve the integration web dashboard."""
+    static_file = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    if os.path.exists(static_file):
+        return FileResponse(static_file)
+    return {"error": "Dashboard template not found"}
