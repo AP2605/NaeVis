@@ -2,7 +2,8 @@
 Real-Time Telemetry & Simulation WebSocket Bridge Server (P3 Module).
 =====================================================================
 Central communication hub connecting Blender (P2), Navigation (P3), and Dashboard (P4):
-  - Ingests high-rate `SensorPacket` stream from Blender (P2) on `/ws/sensors` or HTTP.
+  - Ingests high-rate `SensorPacket` stream from Blender (P2) on `/ws/sensors`.
+  - Ingests optional binary JPEG video stream on `/ws/video`.
   - Computes real-time 6-DOF state estimation and waypoint flight guidance.
   - Broadcasts `EstimatedPose` and `flight_command` to React 3D Dashboard (P4) on `/ws/telemetry`.
   - Optional Live HUD Cockpit Video Window (--view).
@@ -59,7 +60,10 @@ class NavigationStreamServer:
 
         self.telemetry_clients: Set[Any] = set()
         self.sensor_clients: Set[Any] = set()
+        self.video_clients: Set[Any] = set()
         self.frame_counter = 0
+        self.latest_video_frame: Optional[np.ndarray] = None
+        self.latest_output_packet: Dict[str, Any] = {}
 
     def draw_hud(self, frame: Optional[np.ndarray], output_packet: Dict[str, Any]) -> np.ndarray:
         """Renders an aerospace-grade tactical HUD overlay on the drone's camera frame."""
@@ -70,7 +74,7 @@ class NavigationStreamServer:
         conf = output_packet.get("confidence", 1.0) * 100.0
 
         if frame is not None:
-            vis = cv2.resize(frame, (800, 450)) if (frame.shape[1] > 800) else frame.copy()
+            vis = cv2.resize(frame, (800, 450)) if (frame.shape[1] != 800 or frame.shape[0] != 450) else frame.copy()
         else:
             # Create synthetic tactical radar/HUD display
             vis = np.zeros((450, 800, 3), dtype=np.uint8)
@@ -88,7 +92,7 @@ class NavigationStreamServer:
         color_cyan = (255, 230, 0)
         color_white = (255, 255, 255)
 
-        # 1. Central Crosshair & Pitch Ladder
+        # 1. Central Crosshair
         cv2.line(vis, (cx - 25, cy), (cx + 25, cy), color_green, 1)
         cv2.line(vis, (cx, cy - 25), (cx, cy + 25), color_green, 1)
         cv2.circle(vis, (cx, cy), 12, color_green, 1)
@@ -123,7 +127,8 @@ class NavigationStreamServer:
         if not self.enable_view:
             return
         try:
-            hud_frame = self.draw_hud(frame, output_packet)
+            display_frame = frame if frame is not None else self.latest_video_frame
+            hud_frame = self.draw_hud(display_frame, output_packet)
             cv2.imshow("NAVIS DRONE POV — LIVE COCKPIT FEED", hud_frame)
             cv2.waitKey(1)
         except Exception:
@@ -140,6 +145,27 @@ class NavigationStreamServer:
             self.telemetry_clients.discard(websocket)
             print(f"[Server] P4 Dashboard disconnected: {addr}")
 
+    async def handle_video_feed(self, websocket):
+        """Handles incoming binary JPEG video stream from Blender on /ws/video."""
+        self.video_clients.add(websocket)
+        addr = getattr(websocket, "remote_address", "Blender Video")
+        print(f"[Server] P2 Blender Video Stream connected: {addr}")
+        try:
+            async for message in websocket:
+                try:
+                    if isinstance(message, bytes):
+                        nparr = np.frombuffer(message, np.uint8)
+                        decoded = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        if decoded is not None:
+                            self.latest_video_frame = decoded
+                            if self.enable_view and self.latest_output_packet:
+                                self.render_live_view(self.latest_video_frame, self.latest_output_packet)
+                except Exception:
+                    pass
+        finally:
+            self.video_clients.discard(websocket)
+            print(f"[Server] P2 Blender Video Stream disconnected: {addr}")
+
     async def handle_sensor_feed(self, websocket):
         """Handles incoming sensor packets from P2 (Blender / Simulator)."""
         self.sensor_clients.add(websocket)
@@ -155,6 +181,7 @@ class NavigationStreamServer:
                     t0 = time.perf_counter()
                     output_packet = self.engine.process_packet(data)
                     dt_ms = (time.perf_counter() - t0) * 1000.0
+                    self.latest_output_packet = output_packet
 
                     # Optional Live Cockpit Window
                     if self.enable_view:
@@ -191,7 +218,7 @@ class NavigationStreamServer:
             print(f"[Server] P2 Blender disconnected: {addr}")
 
     async def router(self, websocket, *args):
-        """Universal WebSocket router supporting both websockets 17.x and legacy versions."""
+        """Universal WebSocket router supporting websockets 17.x and legacy versions."""
         path = "/"
         if hasattr(websocket, "request") and hasattr(websocket.request, "path"):
             path = websocket.request.path
@@ -202,6 +229,8 @@ class NavigationStreamServer:
 
         if "/sensors" in path:
             await self.handle_sensor_feed(websocket)
+        elif "/video" in path:
+            await self.handle_video_feed(websocket)
         else:
             await self.register_telemetry_client(websocket)
 
@@ -216,10 +245,11 @@ class NavigationStreamServer:
         print("    NAVIS NAVIGATION & TELEMETRY WEBSOCKET BRIDGE SERVER    ")
         print("=" * 65)
         print(f" Listening on: ws://{self.host}:{self.port}")
-        print(f"  • P2 Blender Feed URL:     ws://{self.host}:{self.port}/ws/sensors")
-        print(f"  • P4 Dashboard Stream URL: ws://{self.host}:{self.port}/ws/telemetry")
+        print(f"  • P2 Blender Sensor Feed:  ws://{self.host}:{self.port}/ws/sensors")
+        print(f"  • P2 Blender Video Stream: ws://{self.host}:{self.port}/ws/video")
+        print(f"  • P4 Dashboard Stream:     ws://{self.host}:{self.port}/ws/telemetry")
         if self.enable_view:
-            print(f"  • Live Cockpit HUD Window: ENABLED (Press 'q' in window to close)")
+            print(f"  • Live Cockpit HUD Window: ENABLED")
         print("=" * 65 + "\n")
 
         async with websockets.serve(self.router, self.host, self.port):
