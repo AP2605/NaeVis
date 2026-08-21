@@ -213,6 +213,14 @@ class NavigationEngine:
         if isinstance(camera_data, dict):
             if "frame" in camera_data and camera_data["frame"] is not None:
                 return camera_data["frame"]
+            if "image_base64" in camera_data and camera_data["image_base64"]:
+                try:
+                    import base64
+                    img_bytes = base64.b64decode(camera_data["image_base64"])
+                    nparr = np.frombuffer(img_bytes, np.uint8)
+                    return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                except Exception:
+                    pass
             if "image_path" in camera_data and camera_data["image_path"]:
                 path = camera_data["image_path"]
                 if os.path.exists(path):
