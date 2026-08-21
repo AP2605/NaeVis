@@ -152,6 +152,11 @@ class NavigationEngine:
                     quat_vo=vo_res["orientation_quat"],
                     confidence=confidence
                 )
+        elif "sim_position" in packet and packet["sim_position"] is not None:
+            sim_pos = self._parse_vector3(packet["sim_position"])
+            ekf_state["position"] = sim_pos
+            tracking_state = "SIMULATION_TRACKING"
+            confidence = 0.98
 
         # 8. Compute Autonomous Flight Steering Command for Blender
         pos = ekf_state["position"]

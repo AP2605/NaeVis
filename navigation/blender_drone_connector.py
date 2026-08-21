@@ -5,16 +5,18 @@ Run this script inside Blender (Scripting Workspace) to connect the 3D drone
 model directly to P3's Autonomous Navigation Engine in real time.
 
 Features:
-  - Captures camera viewport / renders at 30 FPS.
-  - Simulates 6-axis IMU (accelerometer specific force + gyroscope).
-  - Sends synchronized SensorPacket to P3 over WebSocket (ws://<IP>:8765/ws/sensors).
-  - Receives P3's autonomous flight steering commands and moves the Blender drone model.
+  - Automatically identifies the Drone Mesh/Rig object (ignoring the Camera).
+  - Captures 3D world telemetry & simulates 6-axis IMU (accel + gyro).
+  - Streams SensorPacket to P3 over WebSocket / HTTP.
+  - Smoothly rotates and moves the 3D Drone & attached Camera along mission waypoints.
+  - Forces 3D Viewport live redraws so movement is animated in real time.
 
 How to Use in Blender:
   1. Open your 3D drone scene in Blender.
-  2. Set SERVER_IP to P3's IP below (e.g. "10.247.227.32" or "localhost").
-  3. Go to Blender's Scripting workspace, open this file, and click "Run Script" (or Alt+P).
-  4. Press ESC in 3D Viewport to stop.
+  2. If your drone object has a specific name (e.g. "Drone", "Quad", "Body"), set DRONE_OBJECT_NAME below.
+  3. Set SERVER_IP to P3's IP (e.g. "10.247.227.32" or "localhost").
+  4. In Blender Scripting tab, click "Run Script" (or press Alt+P).
+  5. Press ESC in the 3D Viewport to stop.
 """
 
 import math
@@ -37,15 +39,15 @@ except ImportError:
     import urllib.request
 
 # =========================================================================
-# CONFIGURATION — Edit SERVER_IP to match P3's IP
+# CONFIGURATION — Set P3's IP & Drone Object Name
 # =========================================================================
-SERVER_IP = "10.247.227.32"       # <--- Replace with P3's IP (or "localhost")
+SERVER_IP = "10.247.227.32"          # <--- P3 Server IP
 SERVER_PORT = 8765
 SERVER_WS_URL = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/sensors"
 SERVER_HTTP_URL = f"http://{SERVER_IP}:{SERVER_PORT}/api/packet"
 
-DRONE_OBJECT_NAME = "Drone"
-CAMERA_OBJECT_NAME = "Camera"
+DRONE_OBJECT_NAME = "Drone"           # Name of your 3D Drone Mesh / Rig
+CAMERA_OBJECT_NAME = "Camera"         # Name of your Drone Camera
 FPS = 30
 DT = 1.0 / FPS
 
@@ -63,6 +65,7 @@ class BlenderDroneBridge:
         self.prev_time = time.time()
         self.frame_id = 0
         self.ws = None
+        self._cached_drone_obj = None
 
     def connect_ws(self):
         """Attempts to open persistent WebSocket connection to P3 server."""
@@ -74,9 +77,37 @@ class BlenderDroneBridge:
                 self.ws = None
 
     def get_drone_object(self):
+        """Finds the actual drone model object (strictly avoiding camera objects)."""
         if not IN_BLENDER:
             return None
-        return bpy.data.objects.get(self.drone_name) or bpy.context.active_object
+
+        if self._cached_drone_obj and self._cached_drone_obj.name in bpy.data.objects:
+            return self._cached_drone_obj
+
+        # 1. Try exact name match if NOT a camera
+        obj = bpy.data.objects.get(self.drone_name)
+        if obj and obj.type != 'CAMERA':
+            self._cached_drone_obj = obj
+            return obj
+
+        # 2. Try substring match (e.g. "drone", "quad", "uav", "body", "frame")
+        for o in bpy.data.objects:
+            if o.type != 'CAMERA' and any(k in o.name.lower() for k in ["drone", "quad", "uav", "body", "aircraft", "plane"]):
+                self._cached_drone_obj = o
+                return o
+
+        # 3. Try active object if not camera
+        if bpy.context.active_object and bpy.context.active_object.type != 'CAMERA':
+            self._cached_drone_obj = bpy.context.active_object
+            return self._cached_drone_obj
+
+        # 4. Fallback to first non-camera mesh object
+        for o in bpy.data.objects:
+            if o.type in ['MESH', 'EMPTY']:
+                self._cached_drone_obj = o
+                return o
+
+        return None
 
     def get_camera_object(self):
         if not IN_BLENDER:
@@ -99,7 +130,7 @@ class BlenderDroneBridge:
             pos_vec = [float(pos.x), float(pos.y), float(pos.z)]
             euler_deg = [math.degrees(rot_euler.x), math.degrees(rot_euler.y), math.degrees(rot_euler.z)]
         else:
-            pos_vec = [0.0, 0.0, 5.0]
+            pos_vec = [0.0, 0.0, 0.0]
             euler_deg = [0.0, 0.0, 0.0]
 
         # Calculate linear velocity
@@ -143,6 +174,11 @@ class BlenderDroneBridge:
             "imu": {
                 "acceleration": acc_specific_force,
                 "gyroscope": gyro_reading
+            },
+            "sim_position": {
+                "x": pos_vec[0],
+                "y": pos_vec[1],
+                "z": pos_vec[2]
             }
         }
 
@@ -186,28 +222,29 @@ class BlenderDroneBridge:
 
     def apply_flight_command(self, flight_cmd: dict):
         """
-        Applies P3's autonomous flight command to move the drone in Blender.
+        Applies P3's autonomous flight command to physically move the drone in Blender.
         """
         drone = self.get_drone_object()
         if drone is None or not flight_cmd:
             return
 
-        speed = float(flight_cmd.get("desired_velocity_mps", 0.0))
+        speed = float(flight_cmd.get("desired_velocity_mps", 2.0))
         target_yaw_deg = float(flight_cmd.get("target_heading_yaw_deg", 0.0))
         climb_rate = float(flight_cmd.get("climb_rate_mps", 0.0))
 
-        # 1. Update Yaw Rotation
+        # 1. Smooth Yaw Heading Update
         target_yaw_rad = math.radians(target_yaw_deg)
         current_yaw_rad = drone.rotation_euler.z
         yaw_diff = (target_yaw_rad - current_yaw_rad + math.pi) % (2.0 * math.pi) - math.pi
         drone.rotation_euler.z += yaw_diff * 0.15
 
-        # 2. Update Position
+        # 2. Forward Velocity Vector aligned with Drone Heading
         active_yaw = drone.rotation_euler.z
         vx = speed * math.cos(active_yaw)
         vy = speed * math.sin(active_yaw)
         vz = climb_rate
 
+        # 3. Update Drone Location
         drone.location.x += vx * DT
         drone.location.y += vy * DT
         drone.location.z += vz * DT
@@ -230,15 +267,23 @@ if IN_BLENDER:
             if event.type == 'TIMER':
                 packet, gt = self.bridge.read_telemetry_and_imu()
                 
+                # Send packet to P3 Server and get autonomous steering command
                 flight_cmd = self.bridge.send_sensor_packet(packet)
                 if flight_cmd:
                     self.bridge.apply_flight_command(flight_cmd)
 
+                # Force Blender 3D Viewport to redraw live every frame
+                for window in context.window_manager.windows:
+                    for area in window.screen.areas:
+                        if area.type == 'VIEW_3D':
+                            area.tag_redraw()
+
                 if self.bridge.frame_id % 30 == 0:
-                    wp_idx = flight_cmd.get("active_waypoint_idx", "-")
+                    wp_idx = flight_cmd.get("active_waypoint_idx", "1")
                     wp_name = flight_cmd.get("active_waypoint_name", "Navigating")
-                    status = flight_cmd.get("mission_status", "RUNNING")
-                    self.report({'INFO'}, f"Navis Frame #{packet['frame_id']:04d} | WP #{wp_idx} ({wp_name}) | Status: {status}")
+                    drone = self.bridge.get_drone_object()
+                    loc = drone.location if drone else [0,0,0]
+                    self.report({'INFO'}, f"Frame #{packet['frame_id']:04d} | Pos: ({loc[0]:.1f}, {loc[1]:.1f}, {loc[2]:.1f})m | WP #{wp_idx} ({wp_name})")
 
             return {'PASS_THROUGH'}
 
@@ -247,8 +292,13 @@ if IN_BLENDER:
             self._timer = wm.event_timer_add(DT, window=context.window)
             wm.modal_handler_add(self)
             self.bridge.connect_ws()
-            print(f"\n[Navis Blender Bridge] Started simulation loop (Connecting to {SERVER_WS_URL}).")
-            print("[Navis Blender Bridge] Press ESC in 3D Viewport to stop.\n")
+            drone = self.bridge.get_drone_object()
+            drone_name = drone.name if drone else "None (Auto-detecting)"
+            print(f"\n" + "=" * 60)
+            print(f"[Navis Blender Bridge] TARGET DRONE OBJECT: '{drone_name}' (Type: {drone.type if drone else 'N/A'})")
+            print(f"[Navis Blender Bridge] SERVER URL: {SERVER_WS_URL}")
+            print(f"[Navis Blender Bridge] Simulation loop RUNNING. Press ESC in 3D Viewport to stop.")
+            print("=" * 60 + "\n")
             return {'RUNNING_MODAL'}
 
         def cancel(self, context):
@@ -261,7 +311,7 @@ if IN_BLENDER:
                 except Exception:
                     pass
                 self.bridge.ws = None
-            print("[Navis Blender Bridge] Stopped simulation loop.")
+            print("\n[Navis Blender Bridge] Stopped simulation loop.\n")
 
 
 def register():
