@@ -5,9 +5,9 @@ Run this script inside Blender (Scripting Workspace) to connect the 3D drone
 model directly to P3's Autonomous Navigation Engine in real time.
 
 Features:
-  - Prints all scene objects to Blender System Console for easy debugging.
   - Automatically identifies the Drone Mesh / Root object.
   - Captures 3D world telemetry & simulates 6-axis IMU (accel + gyro).
+  - Optional Live Camera Frame Streaming (STREAM_CAMERA_FRAMES = True).
   - Streams SensorPacket to P3 over WebSocket / HTTP.
   - Smoothly rotates and moves the 3D Drone along mission waypoints.
   - Forces 3D Viewport live redraws & dependency graph updates.
@@ -22,6 +22,7 @@ How to Use in Blender:
 import math
 import time
 import json
+import base64
 
 try:
     import bpy
@@ -39,15 +40,17 @@ except ImportError:
     import urllib.request
 
 # =========================================================================
-# CONFIGURATION — Set P3's IP & Drone Object Name
+# CONFIGURATION — Set P3's IP & Settings
 # =========================================================================
 SERVER_IP = "10.247.227.32"          # <--- P3 Server IP
 SERVER_PORT = 8765
 SERVER_WS_URL = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/sensors"
 SERVER_HTTP_URL = f"http://{SERVER_IP}:{SERVER_PORT}/api/packet"
 
-# If your drone object has a specific name in Blender, put it here:
-DRONE_OBJECT_NAME = ""               # Leave empty "" to auto-select active/first object
+# Set to True if you want to stream actual visual camera frames to P3
+STREAM_CAMERA_FRAMES = False
+
+DRONE_OBJECT_NAME = ""               # Leave empty "" to auto-detect drone object
 CAMERA_OBJECT_NAME = "Camera"
 FPS = 30
 DT = 1.0 / FPS
@@ -113,6 +116,31 @@ class BlenderDroneBridge:
             self.find_and_bind_drone()
         return self._drone_obj
 
+    def get_camera_object(self):
+        if not IN_BLENDER:
+            return None
+        return bpy.data.objects.get(self.camera_name) or bpy.context.scene.camera
+
+    def capture_camera_frame_base64(self) -> str:
+        """Captures a lightweight JPEG image from Blender's camera viewport."""
+        if not IN_BLENDER or not STREAM_CAMERA_FRAMES:
+            return ""
+        try:
+            # Render OpenGL viewport preview into temporary image buffer
+            scene = bpy.context.scene
+            scene.render.image_settings.file_format = 'JPEG'
+            scene.render.image_settings.quality = 50
+            scene.render.resolution_percentage = 40  # Fast compact preview
+            
+            temp_path = bpy.path.abspath("//temp_navis_frame.jpg")
+            scene.render.filepath = temp_path
+            bpy.ops.render.opengl(write_still=True)
+            
+            with open(temp_path, "rb") as img_f:
+                return base64.b64encode(img_f.read()).decode("utf-8")
+        except Exception:
+            return ""
+
     def read_telemetry_and_imu(self):
         """
         Reads drone 3D position and simulates 6-axis IMU measurements.
@@ -161,12 +189,16 @@ class BlenderDroneBridge:
             "z": 0.0
         }
 
+        # Optional Camera Base64 Frame
+        img_b64 = self.capture_camera_frame_base64() if (STREAM_CAMERA_FRAMES and self.frame_id % 2 == 0) else ""
+
         # Build Standardized SensorPacket matching info.md
         sensor_packet = {
             "frame_id": self.frame_id,
             "timestamp": round(self.frame_id * DT, 4),
             "camera": {
                 "image_path": f"frames/frame_{self.frame_id:06d}.png",
+                "image_base64": img_b64,
                 "width": 1280,
                 "height": 720
             },
@@ -312,6 +344,7 @@ if IN_BLENDER:
                 print("\n [WARNING] No Drone Mesh found! Please click/select your drone model in the 3D Viewport.")
             
             print(f" >>> CONNECTING TO: {SERVER_WS_URL}")
+            print(f" >>> CAMERA STREAMING: {'ENABLED' if STREAM_CAMERA_FRAMES else 'DISABLED (Telemetry Mode)'}")
             print(" >>> PRESS ESC IN 3D VIEWPORT TO STOP SIMULATION.")
             print("=" * 65 + "\n")
             
