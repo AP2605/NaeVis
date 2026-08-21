@@ -5,18 +5,18 @@ Run this script inside Blender (Scripting Workspace) to connect the 3D drone
 model directly to P3's Autonomous Navigation Engine in real time.
 
 Features:
-  - Automatically identifies the Drone Mesh/Rig object (ignoring the Camera).
+  - Prints all scene objects to Blender System Console for easy debugging.
+  - Automatically identifies the Drone Mesh / Root object.
   - Captures 3D world telemetry & simulates 6-axis IMU (accel + gyro).
   - Streams SensorPacket to P3 over WebSocket / HTTP.
-  - Smoothly rotates and moves the 3D Drone & attached Camera along mission waypoints.
-  - Forces 3D Viewport live redraws so movement is animated in real time.
+  - Smoothly rotates and moves the 3D Drone along mission waypoints.
+  - Forces 3D Viewport live redraws & dependency graph updates.
 
 How to Use in Blender:
-  1. Open your 3D drone scene in Blender.
-  2. If your drone object has a specific name (e.g. "Drone", "Quad", "Body"), set DRONE_OBJECT_NAME below.
-  3. Set SERVER_IP to P3's IP (e.g. "10.247.227.32" or "localhost").
-  4. In Blender Scripting tab, click "Run Script" (or press Alt+P).
-  5. Press ESC in the 3D Viewport to stop.
+  1. In Blender 3D Viewport, click/select your drone model (or set DRONE_OBJECT_NAME).
+  2. Set SERVER_IP to P3's IP (e.g. "10.247.227.32" or "localhost").
+  3. In Blender Scripting tab, open this file, and click "Run Script" (or press Alt+P).
+  4. Press ESC in the 3D Viewport to stop.
 """
 
 import math
@@ -46,8 +46,9 @@ SERVER_PORT = 8765
 SERVER_WS_URL = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/sensors"
 SERVER_HTTP_URL = f"http://{SERVER_IP}:{SERVER_PORT}/api/packet"
 
-DRONE_OBJECT_NAME = "Drone"           # Name of your 3D Drone Mesh / Rig
-CAMERA_OBJECT_NAME = "Camera"         # Name of your Drone Camera
+# If your drone object has a specific name in Blender, put it here:
+DRONE_OBJECT_NAME = ""               # Leave empty "" to auto-select active/first object
+CAMERA_OBJECT_NAME = "Camera"
 FPS = 30
 DT = 1.0 / FPS
 
@@ -65,7 +66,7 @@ class BlenderDroneBridge:
         self.prev_time = time.time()
         self.frame_id = 0
         self.ws = None
-        self._cached_drone_obj = None
+        self._drone_obj = None
 
     def connect_ws(self):
         """Attempts to open persistent WebSocket connection to P3 server."""
@@ -76,43 +77,41 @@ class BlenderDroneBridge:
             except Exception as e:
                 self.ws = None
 
-    def get_drone_object(self):
-        """Finds the actual drone model object (strictly avoiding camera objects)."""
+    def find_and_bind_drone(self):
+        """Finds and locks onto the drone object in the scene."""
         if not IN_BLENDER:
             return None
 
-        if self._cached_drone_obj and self._cached_drone_obj.name in bpy.data.objects:
-            return self._cached_drone_obj
+        # 1. If explicit name provided and exists
+        if self.drone_name and self.drone_name in bpy.data.objects:
+            self._drone_obj = bpy.data.objects[self.drone_name]
+            return self._drone_obj
 
-        # 1. Try exact name match if NOT a camera
-        obj = bpy.data.objects.get(self.drone_name)
-        if obj and obj.type != 'CAMERA':
-            self._cached_drone_obj = obj
-            return obj
-
-        # 2. Try substring match (e.g. "drone", "quad", "uav", "body", "frame")
-        for o in bpy.data.objects:
-            if o.type != 'CAMERA' and any(k in o.name.lower() for k in ["drone", "quad", "uav", "body", "aircraft", "plane"]):
-                self._cached_drone_obj = o
-                return o
-
-        # 3. Try active object if not camera
+        # 2. Check active object in 3D Viewport if not camera
         if bpy.context.active_object and bpy.context.active_object.type != 'CAMERA':
-            self._cached_drone_obj = bpy.context.active_object
-            return self._cached_drone_obj
+            self._drone_obj = bpy.context.active_object
+            return self._drone_obj
 
-        # 4. Fallback to first non-camera mesh object
+        # 3. Search by common keywords (drone, quad, uav, body, aircraft, plane, mesh, root)
+        candidates = []
         for o in bpy.data.objects:
-            if o.type in ['MESH', 'EMPTY']:
-                self._cached_drone_obj = o
-                return o
+            if o.type != 'CAMERA':
+                candidates.append(o)
+                if any(k in o.name.lower() for k in ["drone", "quad", "uav", "body", "frame", "aircraft", "plane"]):
+                    self._drone_obj = o
+                    return self._drone_obj
+
+        # 4. Fallback to first non-camera object
+        if candidates:
+            self._drone_obj = candidates[0]
+            return self._drone_obj
 
         return None
 
-    def get_camera_object(self):
-        if not IN_BLENDER:
-            return None
-        return bpy.data.objects.get(self.camera_name) or bpy.context.scene.camera
+    def get_drone_object(self):
+        if self._drone_obj is None or (IN_BLENDER and self._drone_obj.name not in bpy.data.objects):
+            self.find_and_bind_drone()
+        return self._drone_obj
 
     def read_telemetry_and_imu(self):
         """
@@ -230,24 +229,28 @@ class BlenderDroneBridge:
 
         speed = float(flight_cmd.get("desired_velocity_mps", 2.0))
         target_yaw_deg = float(flight_cmd.get("target_heading_yaw_deg", 0.0))
-        climb_rate = float(flight_cmd.get("climb_rate_mps", 0.0))
+        climb_rate = float(flight_cmd.get("climb_rate_mps", 0.5))
 
-        # 1. Smooth Yaw Heading Update
+        # 1. Smooth Yaw Heading Rotation
         target_yaw_rad = math.radians(target_yaw_deg)
         current_yaw_rad = drone.rotation_euler.z
         yaw_diff = (target_yaw_rad - current_yaw_rad + math.pi) % (2.0 * math.pi) - math.pi
-        drone.rotation_euler.z += yaw_diff * 0.15
+        drone.rotation_euler.z += yaw_diff * 0.20
 
-        # 2. Forward Velocity Vector aligned with Drone Heading
+        # 2. Forward Velocity Vector aligned with Target Heading
         active_yaw = drone.rotation_euler.z
         vx = speed * math.cos(active_yaw)
         vy = speed * math.sin(active_yaw)
         vz = climb_rate
 
-        # 3. Update Drone Location
+        # 3. Physically Update Drone Location
         drone.location.x += vx * DT
         drone.location.y += vy * DT
         drone.location.z += vz * DT
+
+        # 4. Update Blender dependency graph
+        if IN_BLENDER:
+            bpy.context.view_layer.update()
 
 
 # Blender Modal Timer Operator
@@ -282,8 +285,8 @@ if IN_BLENDER:
                     wp_idx = flight_cmd.get("active_waypoint_idx", "1")
                     wp_name = flight_cmd.get("active_waypoint_name", "Navigating")
                     drone = self.bridge.get_drone_object()
-                    loc = drone.location if drone else [0,0,0]
-                    self.report({'INFO'}, f"Frame #{packet['frame_id']:04d} | Pos: ({loc[0]:.1f}, {loc[1]:.1f}, {loc[2]:.1f})m | WP #{wp_idx} ({wp_name})")
+                    loc = drone.location if drone else [0, 0, 0]
+                    self.report({'INFO'}, f"Frame #{packet['frame_id']:04d} | Drone '{drone.name if drone else 'None'}': ({loc[0]:.1f}, {loc[1]:.1f}, {loc[2]:.1f})m | WP #{wp_idx}")
 
             return {'PASS_THROUGH'}
 
@@ -292,13 +295,26 @@ if IN_BLENDER:
             self._timer = wm.event_timer_add(DT, window=context.window)
             wm.modal_handler_add(self)
             self.bridge.connect_ws()
-            drone = self.bridge.get_drone_object()
-            drone_name = drone.name if drone else "None (Auto-detecting)"
-            print(f"\n" + "=" * 60)
-            print(f"[Navis Blender Bridge] TARGET DRONE OBJECT: '{drone_name}' (Type: {drone.type if drone else 'N/A'})")
-            print(f"[Navis Blender Bridge] SERVER URL: {SERVER_WS_URL}")
-            print(f"[Navis Blender Bridge] Simulation loop RUNNING. Press ESC in 3D Viewport to stop.")
-            print("=" * 60 + "\n")
+            
+            drone = self.bridge.find_and_bind_drone()
+            
+            print("\n" + "=" * 65)
+            print("         NAVIS BLENDER DRONE SIMULATION BRIDGE           ")
+            print("=" * 65)
+            print(" [SCENE OBJECTS LIST]:")
+            for obj in bpy.data.objects:
+                marker = " <--- [CONTROLLED DRONE]" if obj == drone else ""
+                print(f"   • '{obj.name}' (Type: {obj.type}){marker}")
+            
+            if drone:
+                print(f"\n >>> TARGETING DRONE OBJECT: '{drone.name}' at Location: {list(drone.location)}")
+            else:
+                print("\n [WARNING] No Drone Mesh found! Please click/select your drone model in the 3D Viewport.")
+            
+            print(f" >>> CONNECTING TO: {SERVER_WS_URL}")
+            print(" >>> PRESS ESC IN 3D VIEWPORT TO STOP SIMULATION.")
+            print("=" * 65 + "\n")
+            
             return {'RUNNING_MODAL'}
 
         def cancel(self, context):
