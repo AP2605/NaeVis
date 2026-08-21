@@ -144,8 +144,8 @@ class FrameSynchronizer:
 
     def get_recent_frames(self, limit: int = 50) -> list[IntegratedFrame]:
         """Retrieve most recent integrated frames in chronological order."""
-        values = list(self._frames.values())
-        return values[-limit:]
+        sorted_frames = sorted(self._frames.values(), key=lambda f: f.frame_id)
+        return sorted_frames[-limit:]
 
     def get_latest_integrated_state(self) -> IntegratedState:
         """Construct the latest composite state across all modules."""

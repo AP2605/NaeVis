@@ -165,11 +165,113 @@ function TrajectoryLine({
   );
 }
 
-function WaypointMarkers({ mission }: { mission: Mission | null }) {
+interface WaypointMarkersProps {
+  mission: Mission | null;
+  simDronePos: { x: number; y: number; z: number };
+  trajectoryHistory?: { ground_truth: TrajectoryPoint[]; estimated: TrajectoryPoint[] } | null;
+}
+
+function WaypointMarkers({ mission, simDronePos, trajectoryHistory }: WaypointMarkersProps) {
   if (!mission) return null;
 
   const srcPos = simToThree(mission.source.x, mission.source.y, mission.source.z);
   const destPos = simToThree(mission.destination.x, mission.destination.y, mission.destination.z);
+
+  const SPATIAL_THRESHOLD = 3.5; // Spatial threshold (meters) for reaching a waypoint
+
+  // Derive status (REACHED, CURRENT, PENDING) for each waypoint dynamically
+  const waypointStatuses = useMemo(() => {
+    if (!mission.waypoints || mission.waypoints.length === 0) return [];
+
+    const isMissionCompleted = mission.status === "COMPLETED";
+    const estPoints = trajectoryHistory?.estimated ?? [];
+
+    let highestReachedIndex = -1;
+
+    if (isMissionCompleted) {
+      highestReachedIndex = mission.waypoints.length - 1;
+    } else {
+      for (let i = 0; i < mission.waypoints.length; i++) {
+        const wp = mission.waypoints[i];
+
+        // 1. Explicit backend waypoint status
+        if (wp.status === "REACHED") {
+          highestReachedIndex = Math.max(highestReachedIndex, i);
+          continue;
+        }
+
+        // 2. Live estimated drone proximity
+        const distCurrent = Math.hypot(
+          simDronePos.x - wp.x,
+          simDronePos.y - wp.y,
+          simDronePos.z - wp.z
+        );
+        if (distCurrent <= SPATIAL_THRESHOLD) {
+          highestReachedIndex = Math.max(highestReachedIndex, i);
+          continue;
+        }
+
+        // 3. Proximity check across recent trajectory trail
+        const reachedInTrail = estPoints.some((p) => {
+          return Math.hypot(p.x - wp.x, p.y - wp.y, p.z - wp.z) <= SPATIAL_THRESHOLD;
+        });
+        if (reachedInTrail) {
+          highestReachedIndex = Math.max(highestReachedIndex, i);
+        }
+      }
+
+      // 4. Backend progress telemetry
+      if (mission.progress?.waypoints_completed) {
+        highestReachedIndex = Math.max(
+          highestReachedIndex,
+          mission.progress.waypoints_completed - 1
+        );
+      }
+    }
+
+    return mission.waypoints.map((_, idx) => {
+      if (idx <= highestReachedIndex) return "REACHED";
+      if (idx === highestReachedIndex + 1) return "CURRENT";
+      return "PENDING";
+    });
+  }, [
+    mission.status,
+    mission.waypoints,
+    mission.progress?.waypoints_completed,
+    simDronePos.x,
+    simDronePos.y,
+    simDronePos.z,
+    trajectoryHistory?.estimated,
+  ]);
+
+  // Destination reached status
+  const isDestReached = useMemo(() => {
+    if (mission.status === "COMPLETED") return true;
+    const distToDest = Math.hypot(
+      simDronePos.x - mission.destination.x,
+      simDronePos.y - mission.destination.y,
+      simDronePos.z - mission.destination.z
+    );
+    if (distToDest <= SPATIAL_THRESHOLD) return true;
+    const estPoints = trajectoryHistory?.estimated ?? [];
+    return estPoints.some(
+      (p) =>
+        Math.hypot(
+          p.x - mission.destination.x,
+          p.y - mission.destination.y,
+          p.z - mission.destination.z
+        ) <= SPATIAL_THRESHOLD
+    );
+  }, [
+    mission.status,
+    mission.destination.x,
+    mission.destination.y,
+    mission.destination.z,
+    simDronePos.x,
+    simDronePos.y,
+    simDronePos.z,
+    trajectoryHistory?.estimated,
+  ]);
 
   return (
     <group>
@@ -181,7 +283,7 @@ function WaypointMarkers({ mission }: { mission: Mission | null }) {
         </mesh>
         <Html distanceFactor={25} position={[0, 1.2, 0]} center>
           <div className="bg-emerald-950/90 text-emerald-400 border border-emerald-500/40 text-[10px] px-1.5 py-0.5 rounded font-mono font-bold whitespace-nowrap shadow-lg">
-            SRC (0,0)
+            SRC ({mission.source.x.toFixed(0)},{mission.source.y.toFixed(0)})
           </div>
         </Html>
       </group>
@@ -190,10 +292,20 @@ function WaypointMarkers({ mission }: { mission: Mission | null }) {
       <group position={destPos}>
         <mesh>
           <cylinderGeometry args={[0.7, 0.7, 0.4, 16]} />
-          <meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={0.9} />
+          <meshStandardMaterial
+            color={isDestReached ? "#10b981" : "#f59e0b"}
+            emissive={isDestReached ? "#10b981" : "#f59e0b"}
+            emissiveIntensity={isDestReached ? 0.8 : 0.9}
+          />
         </mesh>
         <Html distanceFactor={25} position={[0, 1.2, 0]} center>
-          <div className="bg-amber-950/90 text-amber-400 border border-amber-500/40 text-[10px] px-1.5 py-0.5 rounded font-mono font-bold whitespace-nowrap shadow-lg">
+          <div
+            className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold whitespace-nowrap border shadow-lg ${
+              isDestReached
+                ? "bg-emerald-950/90 text-emerald-400 border-emerald-500/40"
+                : "bg-amber-950/90 text-amber-400 border-amber-500/40"
+            }`}
+          >
             DEST ({mission.destination.x.toFixed(0)},{mission.destination.y.toFixed(0)})
           </div>
         </Html>
@@ -202,15 +314,20 @@ function WaypointMarkers({ mission }: { mission: Mission | null }) {
       {/* Intermediate Waypoints */}
       {mission.waypoints.map((wp, idx) => {
         const wpPos = simToThree(wp.x, wp.y, wp.z);
-        const isReached = wp.status === "REACHED";
-        const isCurrent = wp.status === "CURRENT";
+        const status = waypointStatuses[idx] || "PENDING";
+        const isReached = status === "REACHED";
+        const isCurrent = status === "CURRENT";
         const wpColor = isReached ? "#10b981" : isCurrent ? "#f59e0b" : "#64748b";
 
         return (
           <group key={idx} position={wpPos}>
             <mesh>
               <sphereGeometry args={[0.5, 16, 16]} />
-              <meshStandardMaterial color={wpColor} emissive={wpColor} emissiveIntensity={isCurrent ? 0.9 : 0.4} />
+              <meshStandardMaterial
+                color={wpColor}
+                emissive={wpColor}
+                emissiveIntensity={isCurrent ? 0.9 : isReached ? 0.6 : 0.2}
+              />
             </mesh>
             <Html distanceFactor={25} position={[0, 1.0, 0]} center>
               <div
@@ -228,16 +345,6 @@ function WaypointMarkers({ mission }: { mission: Mission | null }) {
           </group>
         );
       })}
-
-      {/* Planned Flight Route Line */}
-      {(() => {
-        const routePoints: [number, number, number][] = [
-          srcPos,
-          ...mission.waypoints.map((w) => simToThree(w.x, w.y, w.z)),
-          destPos,
-        ];
-        return <TrajectoryLine points={routePoints} color="#475569" dashed />;
-      })()}
     </group>
   );
 }
@@ -324,6 +431,14 @@ export function Navigation3DView({
     controlsRef.current.update();
   };
 
+  // Sim Drone Coordinates for metric distance checks
+  const simDronePos = useMemo(() => {
+    if (telemetry) {
+      return { x: telemetry.x, y: telemetry.y, z: telemetry.z };
+    }
+    return { x: 0, y: 0, z: 10 };
+  }, [telemetry?.x, telemetry?.y, telemetry?.z]);
+
   return (
     <div className="relative w-full h-full min-h-[380px] bg-slate-950 rounded-lg overflow-hidden border border-slate-800 shadow-xl flex flex-col">
       {/* 3D Scene Header Bar */}
@@ -405,8 +520,14 @@ export function Navigation3DView({
             <DroneModel position={gtPos} orientation={gtAtt} color="#10b981" isGhost />
           )}
 
-          {/* Waypoints & Planned Route */}
-          {showWaypoints && <WaypointMarkers mission={mission} />}
+          {/* Waypoints & Target Markers */}
+          {showWaypoints && (
+            <WaypointMarkers
+              mission={mission}
+              simDronePos={simDronePos}
+              trajectoryHistory={trajectoryHistory}
+            />
+          )}
 
           {/* Estimated Trajectory Path */}
           {showEstTraj && <TrajectoryLine points={estTrajPoints} color="#06b6d4" />}

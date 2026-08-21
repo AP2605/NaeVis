@@ -19,6 +19,18 @@ router = APIRouter(tags=["Telemetry"])
     summary="Get current drone telemetry (v1)",
     description="Retrieve the latest estimated pose, velocity, attitude, and localization confidence of the drone.",
 )
+@router.get(
+    "/api/v1/telemetry/latest",
+    response_model=Telemetry,
+    summary="Get latest drone telemetry",
+    description="Retrieve the latest estimated pose, velocity, attitude, and localization confidence of the drone.",
+)
+@router.get(
+    "/api/v1/telemetry/current",
+    response_model=Telemetry,
+    summary="Get current drone telemetry snapshot",
+    description="Retrieve the latest estimated pose, velocity, attitude, and localization confidence of the drone.",
+)
 def get_telemetry() -> Telemetry:
     """Return the current telemetry data from IntegrationService."""
     return integration_service.get_current_telemetry()

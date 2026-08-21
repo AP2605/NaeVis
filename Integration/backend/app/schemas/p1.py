@@ -1,6 +1,7 @@
 """P1 ML / Perception schemas."""
 
-from pydantic import BaseModel, Field
+from typing import Any
+from pydantic import BaseModel, Field, model_validator
 from app.schemas.common import Position3D
 
 
@@ -26,12 +27,22 @@ class TerrainResult(BaseModel):
         description="Detected terrain sub-features (e.g. ['asphalt_road', 'vegetation', 'flat_ground'])",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def parse_terrain_inputs(cls, data: Any) -> Any:
+        """Support 'class' alias for terrain_type."""
+        if isinstance(data, dict):
+            data = dict(data)
+            if "class" in data and "terrain_type" not in data:
+                data["terrain_type"] = data.pop("class")
+        return data
+
 
 class Landmark(BaseModel):
     """Detected visual or topological landmark."""
 
-    landmark_id: str | int = Field(..., description="Unique identifier for the landmark")
-    label: str = Field(..., description="Semantic label (e.g. building_corner, road_intersection, tower)")
+    landmark_id: str | int = Field(default="1", description="Unique identifier for the landmark")
+    label: str = Field(default="object", description="Semantic label (e.g. building_corner, road_intersection, tower)")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Detection confidence score")
     bbox: list[float] | None = Field(
         default=None,
@@ -41,6 +52,18 @@ class Landmark(BaseModel):
         default=None,
         description="Estimated relative 3D coordinate vector from drone to landmark in meters",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_landmark_inputs(cls, data: Any) -> Any:
+        """Support 'class' alias for label and default landmark_id if missing."""
+        if isinstance(data, dict):
+            data = dict(data)
+            if "class" in data and "label" not in data:
+                data["label"] = data.pop("class")
+            if "landmark_id" not in data:
+                data["landmark_id"] = data.get("label", "1")
+        return data
 
 
 class SegmentationResult(BaseModel):
@@ -64,12 +87,26 @@ class PlaceRecognition(BaseModel):
     """Visual place recognition / topological loop closure match."""
 
     match_found: bool = Field(default=False, description="Whether a visual database match was recognized")
-    location_id: str | None = Field(default=None, description="Recognized location node ID")
+    location_id: str | int | None = Field(default=None, description="Recognized location node ID")
     similarity_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Visual descriptor similarity score")
     reference_coordinates: Position3D | None = Field(
         default=None,
         description="Known reference geo-position of the matched location",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_place_recognition(cls, data: Any) -> Any:
+        """Support 'confidence' alias for similarity_score and auto-set match_found."""
+        if isinstance(data, dict):
+            data = dict(data)
+            if "confidence" in data and "similarity_score" not in data:
+                data["similarity_score"] = data.pop("confidence")
+            if "match_found" not in data and ("location_id" in data or "similarity_score" in data):
+                data["match_found"] = True
+            if "location_id" in data and data["location_id"] is not None:
+                data["location_id"] = str(data["location_id"])
+        return data
 
 
 class TerrainMatch(BaseModel):
@@ -125,7 +162,7 @@ class P1VisionResult(BaseModel):
     """
 
     frame_id: int = Field(..., description="Frame index matching simulation/navigation frame")
-    timestamp: float = Field(..., description="Timestamp in seconds")
+    timestamp: float = Field(default=0.0, description="Timestamp in seconds")
     terrain: TerrainResult = Field(default_factory=TerrainResult)
     segmentation: SegmentationResult = Field(default_factory=SegmentationResult)
     landmarks: list[Landmark] = Field(default_factory=list)
@@ -134,6 +171,18 @@ class P1VisionResult(BaseModel):
     mission_awareness: MissionAwareness | None = Field(default=None)
     visual_localization_hint: VisualLocalizationHint | None = Field(default=None)
     system: P1SystemInfo | None = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_p1_packet(cls, data: Any) -> Any:
+        """Handle top-level segmentation_mask and missing timestamp."""
+        if isinstance(data, dict):
+            data = dict(data)
+            if "timestamp" not in data or data["timestamp"] is None:
+                data["timestamp"] = 0.0
+            if "segmentation_mask" in data and "segmentation" not in data:
+                data["segmentation"] = {"mask_path": data.pop("segmentation_mask")}
+        return data
 
     model_config = {
         "json_schema_extra": {

@@ -1,6 +1,7 @@
 """P3 Navigation State schemas."""
 
-from pydantic import BaseModel, Field
+from typing import Any
+from pydantic import BaseModel, Field, model_validator
 from app.schemas.common import Velocity3D
 
 
@@ -23,7 +24,7 @@ class NavigationStatePacket(BaseModel):
     """
 
     frame_id: int = Field(..., description="Frame index associated with the navigation estimate")
-    timestamp: float = Field(..., description="Timestamp in seconds")
+    timestamp: float = Field(default=0.0, description="Timestamp in seconds")
     estimated_pose: EstimatedPose = Field(..., description="Estimated 6-DoF pose")
     velocity: Velocity3D = Field(
         default_factory=lambda: Velocity3D(x=0.0, y=0.0, z=0.0),
@@ -43,6 +44,26 @@ class NavigationStatePacket(BaseModel):
         default=None,
         description="Algorithm computation latency in milliseconds",
     )
+    flight_command: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional autonomous flight guidance command from navigation engine",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_navigation_packet(cls, data: Any) -> Any:
+        """Parse velocity list and default timestamp."""
+        if isinstance(data, dict):
+            data = dict(data)
+            if "timestamp" not in data or data["timestamp"] is None:
+                data["timestamp"] = 0.0
+            if "velocity" in data and isinstance(data["velocity"], (list, tuple)) and len(data["velocity"]) >= 3:
+                data["velocity"] = {
+                    "x": float(data["velocity"][0]),
+                    "y": float(data["velocity"][1]),
+                    "z": float(data["velocity"][2]),
+                }
+        return data
 
     model_config = {
         "json_schema_extra": {

@@ -60,8 +60,8 @@ class TrajectoryRepository:
         self, limit: int = 500, mission_id: str | None = None
     ) -> TrajectoryResponse:
         """Return synchronized trajectory points up to limit."""
-        gt_list = list(self._gt_buffer)[-limit:]
-        est_list = list(self._est_buffer)[-limit:]
+        gt_list = sorted(self._gt_buffer, key=lambda p: (p.frame_id or 0, p.timestamp))[-limit:]
+        est_list = sorted(self._est_buffer, key=lambda p: (p.frame_id or 0, p.timestamp))[-limit:]
         return TrajectoryResponse(
             mission_id=mission_id,
             ground_truth=gt_list,
@@ -70,9 +70,10 @@ class TrajectoryRepository:
         )
 
     def get_synchronized_pairs(self, limit: int = 500) -> list[TrajectorySyncPair]:
-        """Return matched synchronized pairs having both GT and EST."""
+        """Return matched synchronized pairs having both GT and EST sorted chronologically."""
         valid_pairs = [p for p in self._sync_pairs if p.ground_truth is not None and p.estimated is not None]
-        return valid_pairs[-limit:]
+        sorted_pairs = sorted(valid_pairs, key=lambda p: (p.frame_id or 0, p.timestamp or 0.0))
+        return sorted_pairs[-limit:]
 
     def clear(self) -> None:
         """Reset trajectory buffers."""
