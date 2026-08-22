@@ -146,12 +146,18 @@ class EKFFusion:
 
         # 1. Measurement Residual (Innovation) y (6x1)
         # Position residual
-        res_pos = pos_vo - self.p
+        res_pos = (pos_vo - self.p).flatten()
+        pos_residual_norm = float(np.linalg.norm(res_pos))
+
+        # Chi-Square / Innovation Outlier Gating: clamp residual if optical spike > 0.75m
+        if pos_residual_norm > 0.75:
+            res_pos = res_pos * (0.75 / pos_residual_norm)
+            conf = min(conf, 0.25)
 
         # Orientation error residual: δθ = 2 * (q_nominal^-1 * q_vo).xyz
         q_err = quaternion_multiply(quaternion_conjugate(self.q), quat_vo)
         sign = 1.0 if q_err[0] >= 0.0 else -1.0
-        res_ori = 2.0 * sign * q_err[1:4]
+        res_ori = (2.0 * sign * q_err[1:4]).flatten()
 
         y = np.hstack([res_pos, res_ori])  # 6x1
 

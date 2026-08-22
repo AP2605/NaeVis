@@ -48,6 +48,7 @@ class NavigationEngine:
 
         self.prev_timestamp: Optional[float] = None
         self.initial_world_pos: Optional[np.ndarray] = None
+        self.pose_history: List[np.ndarray] = []
 
     def load_waypoints(self, filepath: str) -> bool:
         """Loads mission waypoints from a JSON file."""
@@ -89,14 +90,8 @@ class NavigationEngine:
           },
           "tracking_state": str,
           "confidence": float,
-          "flight_command": {
-            "desired_velocity_mps": float,
-            "target_heading_yaw_deg": float,
-            "climb_rate_mps": float,
-            "active_waypoint_idx": int,
-            "distance_to_waypoint_m": float,
-            "mission_status": str
-          }
+          "processing_time_ms": float,
+          "flight_command": dict
         }
         """
         t_start = time.perf_counter()
@@ -206,14 +201,24 @@ class NavigationEngine:
             tracking_state = "SIMULATION_TRACKING"
             confidence = 0.98
 
-        # 8. Compute Autonomous Flight Steering Command for Blender
+        # 3-Frame Temporal Median Filter to erase isolated 1-frame jitter
         pos = ekf_state["position"]
+        self.pose_history.append(pos.copy())
+        if len(self.pose_history) > 3:
+            self.pose_history.pop(0)
+
+        if len(self.pose_history) >= 3:
+            smooth_pos = np.median(np.array(self.pose_history), axis=0)
+        else:
+            smooth_pos = pos
+
+        # 8. Compute Autonomous Flight Steering Command for Blender
         vel = ekf_state["velocity"]
         euler_rad = ekf_state["orientation_euler"]  # [roll, pitch, yaw] in radians
         euler_deg = np.degrees(euler_rad)
 
         flight_command = self.guidance.compute_flight_command(
-            current_pos=pos,
+            current_pos=smooth_pos,
             current_yaw_deg=float(euler_deg[2]),
             dt=dt
         )
@@ -225,9 +230,9 @@ class NavigationEngine:
             "frame_id": frame_id,
             "timestamp": round(timestamp, 4),
             "estimated_pose": {
-                "x": round(float(pos[0]), 4),
-                "y": round(float(pos[1]), 4),
-                "z": round(float(pos[2]), 4),
+                "x": round(float(smooth_pos[0]), 4),
+                "y": round(float(smooth_pos[1]), 4),
+                "z": round(float(smooth_pos[2]), 4),
                 "roll": round(float(euler_deg[0]), 2),
                 "pitch": round(float(euler_deg[1]), 2),
                 "yaw": round(float(euler_deg[2]), 2)
