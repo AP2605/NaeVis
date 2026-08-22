@@ -3,16 +3,16 @@ NAVIS BLENDER DRONE SIMULATION + TELEMETRY + VIDEO STREAM
 =========================================================
 
 P3 SLAM Navigation Server:
-    ws://10.247.227.32:8765/ws/sensors
+    ws://10.110.7.32:8765/ws/sensors
 
-P4 Dashboard Video Stream (or P3 Video Stream):
-    ws://10.247.227.40:8000/ws/camera?role=producer  (or ws://10.247.227.32:8765/ws/video)
+P4 Dashboard Video Stream:
+    ws://10.110.7.40:8000/ws/camera?role=producer  (or ws://10.110.7.40:8000/ws/video)
 
-Fixed Issues:
-    1. Cross-platform temp path (fixes Windows /tmp crash).
-    2. Realistic network timeout for flight commands (fixes 1ms socket timeout bug).
-    3. Auto-reconnection to P3 SLAM server if connection drops.
-    4. Non-blocking video transmission queue.
+Robust Multi-Node Implementation:
+    1. Safe non-blocking socket handling (never disconnects on timeout).
+    2. Auto-reconnection every 2 seconds if connection is lost.
+    3. Cross-platform OpenGL camera capture.
+    4. 6-DOF aerodynamic banked turns, pitch tilt, and inertial damping.
 """
 
 import bpy
@@ -22,6 +22,7 @@ import json
 import os
 import threading
 import queue
+import socket
 import websocket
 
 # ============================================================
@@ -29,10 +30,10 @@ import websocket
 # ============================================================
 
 # P3 Server IP (SLAM Navigation & Autopilot)
-P3_SERVER_IP = "10.247.227.32"
+P3_SERVER_IP = "10.110.7.32"
 
 # P4 Backend IP (Integration Dashboard)
-P4_BACKEND_IP = "10.247.227.40"
+P4_BACKEND_IP = "10.110.7.40"
 
 # Target WebSockets
 SERVER_WS_URL = f"ws://{P3_SERVER_IP}:8765/ws/sensors"
@@ -76,12 +77,12 @@ def video_sender_thread():
 
         try:
             if video_ws is None:
-                video_ws = websocket.create_connection(VIDEO_WS_URL, timeout=3)
-                print(f"[VIDEO SUCCESS] Connected to video endpoint: {VIDEO_WS_URL}")
+                video_ws = websocket.create_connection(VIDEO_WS_URL, timeout=3.0)
+                print(f"[VIDEO SUCCESS] Connected to P4 video endpoint: {VIDEO_WS_URL}")
 
             video_ws.send(frame, opcode=websocket.ABNF.OPCODE_BINARY)
 
-        except Exception as e:
+        except Exception:
             try:
                 if video_ws:
                     video_ws.close()
@@ -124,6 +125,7 @@ class BlenderDroneBridge:
         self.prev_pos = None
         self.prev_vel = None
         self.prev_time = time.time()
+        self.prev_euler = None
         self.frame_id = 0
         self._drone_obj = None
 
@@ -166,7 +168,6 @@ class BlenderDroneBridge:
         scene.render.image_settings.file_format = 'JPEG'
         scene.render.image_settings.quality = JPEG_QUALITY
 
-        # Cross-platform temp path (works on Windows & Linux)
         temp_dir = bpy.app.tempdir if hasattr(bpy.app, "tempdir") and bpy.app.tempdir else os.environ.get("TEMP", "/tmp")
         temp_path = os.path.join(temp_dir, "blender_video_frame.jpg")
 
@@ -177,7 +178,6 @@ class BlenderDroneBridge:
             with open(temp_path, "rb") as f:
                 jpeg_bytes = f.read()
 
-            # Push to queue (replace oldest if full)
             try:
                 if video_queue.full():
                     video_queue.get_nowait()
@@ -189,7 +189,7 @@ class BlenderDroneBridge:
             except queue.Full:
                 pass
 
-        except Exception as e:
+        except Exception:
             pass
 
     def read_telemetry_and_imu(self):
@@ -325,7 +325,7 @@ sensor_ws = None
 def connect_sensor_server():
     global sensor_ws
     try:
-        sensor_ws = websocket.create_connection(SERVER_WS_URL, timeout=2.0)
+        sensor_ws = websocket.create_connection(SERVER_WS_URL, timeout=3.0)
         print(f"\n[P3 SLAM SUCCESS] Connected to P3 Navigation Server: {SERVER_WS_URL}\n")
         return True
     except Exception as e:
@@ -357,7 +357,8 @@ class NAVIS_OT_DroneSimulationModal(bpy.types.Operator):
             packet, gt = self.bridge.read_telemetry_and_imu()
 
             # 2. Render and push video frame
-            self.bridge.capture_video_frame()
+            if self.bridge.frame_id % 2 == 0:
+                self.bridge.capture_video_frame()
 
             # 3. Auto-Reconnect to P3 SLAM server if disconnected
             now = time.time()
@@ -371,17 +372,19 @@ class NAVIS_OT_DroneSimulationModal(bpy.types.Operator):
                 try:
                     sensor_ws.send(json.dumps(packet))
                     
-                    # Set 50ms timeout for response (plenty for 0.5ms local Wi-Fi, without dropping)
-                    sensor_ws.settimeout(0.05)
+                    # Safe non-blocking receive (timeout 0.3s)
+                    sensor_ws.settimeout(0.3)
                     try:
                         response = sensor_ws.recv()
                         if response:
                             data = json.loads(response)
                             flight_cmd = data.get("flight_command", {})
                             self.bridge.apply_flight_command(flight_cmd)
-                    except websocket.WebSocketTimeoutException:
+                    except (websocket.WebSocketTimeoutException, socket.timeout, TimeoutError, BlockingIOError):
+                        # Transient timeout on high load: Keep connection alive!
                         pass
                 except Exception as e:
+                    print(f"[P3 SLAM Disconnect Error]: {e}")
                     try:
                         sensor_ws.close()
                     except Exception:
