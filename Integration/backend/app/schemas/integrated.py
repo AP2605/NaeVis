@@ -39,6 +39,39 @@ class IntegratedFrame(BaseModel):
     )
 
 
+class SourceHealth(BaseModel):
+    """Source health and operational state metrics."""
+
+    state: str = Field(
+        default="DISCONNECTED",
+        description="Operational state: CONNECTED | MOCK | STALE | DISCONNECTED | ERROR",
+    )
+    is_real: bool = Field(
+        default=False,
+        description="Whether source is receiving verified real teammate hardware/network data",
+    )
+    last_packet_time: float = Field(
+        default=0.0,
+        description="Epoch timestamp of most recent packet received",
+    )
+    packet_count: int = Field(
+        default=0,
+        description="Total number of packets received",
+    )
+    rate_hz: float = Field(
+        default=0.0,
+        description="Current measured ingestion rate in Hz",
+    )
+    last_frame_id: int | None = Field(
+        default=None,
+        description="Most recent frame index received",
+    )
+    age_seconds: float | None = Field(
+        default=None,
+        description="Elapsed seconds since last received packet",
+    )
+
+
 class IntegratedState(BaseModel):
     """Latest composite system state combining latest available P1, P2, and P3 data."""
 
@@ -73,4 +106,8 @@ class IntegratedState(BaseModel):
     system_status: dict[str, Any] = Field(
         default_factory=dict,
         description="Overall integration hub status",
+    )
+    source_health: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Detailed per-source health status (P1, P2, P3, Camera)",
     )

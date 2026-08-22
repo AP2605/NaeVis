@@ -123,6 +123,16 @@ export interface P1VisionResult {
   };
 }
 
+export interface SourceHealth {
+  state: "CONNECTED" | "MOCK" | "STALE" | "DISCONNECTED" | "ERROR";
+  is_real: boolean;
+  last_packet_time: number;
+  packet_count: number;
+  rate_hz: number;
+  last_frame_id?: number | null;
+  age_seconds?: number | null;
+}
+
 export interface IntegratedState {
   current_frame_id?: number;
   latest_timestamp?: number;
@@ -132,6 +142,12 @@ export interface IntegratedState {
   latest_camera?: CameraReference;
   sync_status?: Record<string, any>;
   system_status?: Record<string, any>;
+  source_health?: {
+    p1?: SourceHealth;
+    p2?: SourceHealth;
+    p3?: SourceHealth;
+    camera?: SourceHealth;
+  };
 }
 
 export interface Telemetry {

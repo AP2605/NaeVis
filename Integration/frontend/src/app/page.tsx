@@ -23,13 +23,75 @@ import { TelemetryCard } from "../components/TelemetryCard";
 import { EventLogCard } from "../components/EventLogCard";
 import { useTelemetryWebSocket } from "../hooks/useTelemetryWebSocket";
 import { useCameraWebSocket } from "../hooks/useCameraWebSocket";
-import { Compass, Radio, ShieldCheck, Activity, Layers } from "lucide-react";
-import { Mission, TrajectoryData } from "../types/telemetry";
+import { Compass, Radio, ShieldCheck, Activity, Layers, Cpu, Video, Navigation as NavIcon, Eye } from "lucide-react";
+import { Mission, SourceHealth, TrajectoryData } from "../types/telemetry";
+
+function SourceStatusBadge({
+  label,
+  icon: Icon,
+  health,
+  fallbackActive,
+}: {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  health?: SourceHealth;
+  fallbackActive?: boolean;
+}) {
+  const state = health?.state ?? (fallbackActive ? "MOCK" : "DISCONNECTED");
+  const isReal = health?.is_real ?? false;
+  const rate = health?.rate_hz ?? 0;
+
+  let badgeClass = "bg-slate-950 text-slate-400 border-slate-800";
+  let dotClass = "bg-slate-600";
+  let displayState: string = state;
+
+  if (state === "CONNECTED" || (isReal && state === "MOCK")) {
+    badgeClass = "bg-emerald-950/70 text-emerald-300 border-emerald-500/40";
+    dotClass = "bg-emerald-400 animate-pulse";
+    displayState = "REAL / ONLINE";
+  } else if (state === "MOCK") {
+    badgeClass = "bg-cyan-950/70 text-cyan-300 border-cyan-500/40";
+    dotClass = "bg-cyan-400 animate-pulse";
+    displayState = "MOCK SIM";
+  } else if (state === "STALE") {
+    badgeClass = "bg-amber-950/70 text-amber-300 border-amber-500/40";
+    dotClass = "bg-amber-400";
+    displayState = "STALE (NO DATA)";
+  } else if (state === "ERROR") {
+    badgeClass = "bg-rose-950/70 text-rose-300 border-rose-500/40";
+    dotClass = "bg-rose-500";
+    displayState = "ERROR";
+  } else {
+    badgeClass = "bg-slate-950/90 text-slate-500 border-slate-800/80";
+    dotClass = "bg-slate-600";
+    displayState = "OFFLINE";
+  }
+
+  return (
+    <div className={`px-2 py-1 rounded border flex items-center gap-1.5 font-mono text-[10.5px] transition-all shadow-sm ${badgeClass}`}>
+      <Icon className="w-3 h-3 stroke-[2] opacity-80" />
+      <span className="font-semibold text-slate-200 font-sans tracking-tight">{label}:</span>
+      <span className="flex items-center gap-1 font-medium">
+        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+        <span>{displayState}</span>
+      </span>
+      {rate > 0 && <span className="text-[10px] text-slate-400 font-normal">({rate.toFixed(1)} Hz)</span>}
+    </div>
+  );
+}
 
 export default function DashboardPage() {
-  const apiBaseUrl = "http://localhost:8000";
-  const wsTelemetryUrl = "ws://localhost:8000/ws/telemetry";
-  const wsCameraUrl = "ws://localhost:8000/ws/video";
+  const [host, setHost] = useState("localhost");
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hostname) {
+      setHost(window.location.hostname);
+    }
+  }, []);
+
+  const apiBaseUrl = `http://${host}:8000`;
+  const wsTelemetryUrl = `ws://${host}:8000/ws/telemetry`;
+  const wsCameraUrl = `ws://${host}:8000/ws/video`;
 
   const {
     isConnected: isTelemetryConnected,
@@ -246,6 +308,41 @@ export default function DashboardPage() {
           </div>
         </div>
       </header>
+
+      {/* M6 Real Integration & Source Health Status Banner */}
+      <div className="bg-slate-900/90 border border-slate-800/90 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2 shadow-sm">
+        <div className="flex items-center gap-1.5 text-xs text-slate-400 font-semibold uppercase tracking-wider">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" />
+          <span>Source Health:</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <SourceStatusBadge
+            label="P1 Perception"
+            icon={Eye}
+            health={integratedState?.source_health?.p1}
+            fallbackActive={!!perception}
+          />
+          <SourceStatusBadge
+            label="P2 Simulation GT"
+            icon={Layers}
+            health={integratedState?.source_health?.p2}
+            fallbackActive={!!groundTruth}
+          />
+          <SourceStatusBadge
+            label="P3 Navigation"
+            icon={NavIcon}
+            health={integratedState?.source_health?.p3}
+            fallbackActive={!!navigation}
+          />
+          <SourceStatusBadge
+            label="P2 Camera"
+            icon={Video}
+            health={integratedState?.source_health?.camera}
+            fallbackActive={isCameraConnected}
+          />
+        </div>
+      </div>
 
       {/* Main Row: Live Camera (Left) + Interactive 3D Navigation (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 items-stretch">

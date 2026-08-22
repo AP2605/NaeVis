@@ -6,6 +6,7 @@ import time
 from typing import Any, Callable, Coroutine, Set
 from fastapi import WebSocket
 
+from app.config import settings
 from app.schemas.camera_packet import (
     decode_camera_packet,
     encode_camera_packet,
@@ -41,6 +42,8 @@ class CameraService:
         self._latest_frame_time: float = 0.0
         self._frame_count: int = 0
         self._fps: float = 0.0
+        self._is_real: bool = False
+        self._last_summary_log_time: float = 0.0
 
     @property
     def viewer_count(self) -> int:
@@ -153,7 +156,9 @@ class CameraService:
     # Ingestion & Multi-Channel Fan-Out
     # -------------------------------------------------------------------------
 
-    async def ingest_and_broadcast_frame(self, incoming_bytes: bytes) -> dict[str, Any]:
+    async def ingest_and_broadcast_frame(
+        self, incoming_bytes: bytes, is_real: bool = False
+    ) -> dict[str, Any]:
         """Ingest raw binary packet from Blender/producer and distribute to all consumers.
 
         Preserves frame_id and timestamp across all channels:
@@ -164,6 +169,7 @@ class CameraService:
 
         Args:
             incoming_bytes: Binary message from producer.
+            is_real: Flag indicating whether stream is from verified real teammate source.
 
         Returns:
             dict containing parsed frame metadata (frame_id, timestamp, payload_size).
@@ -174,6 +180,9 @@ class CameraService:
         except ValueError as err:
             logger.warning("[CameraService] Rejected invalid camera frame: %s", err)
             return {"error": str(err)}
+
+        if is_real:
+            self._is_real = True
 
         # Update frame indexing
         self._frame_count += 1
@@ -186,6 +195,18 @@ class CameraService:
             if dt > 0:
                 self._fps = 0.85 * self._fps + 0.15 * (1.0 / dt)
         self._latest_frame_time = now
+
+        # Periodic summary logging (every 50 frames or ~5 seconds)
+        if (now - self._last_summary_log_time >= 5.0) or (self._frame_count % 50 == 0):
+            src_tag = "REAL" if self._is_real else "MOCK"
+            logger.info(
+                "[P2 Camera] Ingesting video stream [%s]: %.1f FPS | Total: %d frames | Viewers: %d",
+                src_tag,
+                self._fps,
+                self._frame_count,
+                self.total_consumers,
+            )
+            self._last_summary_log_time = now
 
         # Prepare standardized binary packet [20-byte header + JPEG bytes]
         packet_bytes = encode_camera_packet(frame_id, timestamp, jpeg_bytes)
@@ -263,6 +284,8 @@ class CameraService:
         self._latest_frame_time = 0.0
         self._frame_count = 0
         self._fps = 0.0
+        self._is_real = False
+        self._last_summary_log_time = 0.0
 
     def get_latest_frame(self) -> bytes | None:
         """Return the most recently received raw image bytes."""
@@ -271,6 +294,27 @@ class CameraService:
     def get_latest_packet(self) -> bytes | None:
         """Return the most recently received structured binary packet."""
         return self._latest_packet_bytes
+
+    def get_health(self) -> dict[str, Any]:
+        """Return detailed camera source health and operational status."""
+        now = time.time()
+        age = (now - self._latest_frame_time) if self._latest_frame_time > 0 else None
+        if self._frame_count == 0 or self._latest_frame_time == 0:
+            state = "DISCONNECTED"
+        elif age is not None and age <= settings.STALE_TIMEOUT_SEC:
+            state = "CONNECTED" if self._is_real else "MOCK"
+        else:
+            state = "STALE"
+
+        return {
+            "state": state,
+            "is_real": self._is_real,
+            "last_packet_time": round(self._latest_frame_time, 3),
+            "packet_count": self._frame_count,
+            "rate_hz": round(self._fps, 1),
+            "last_frame_id": self._latest_frame_id,
+            "age_seconds": round(age, 2) if age is not None else None,
+        }
 
     def get_stats(self) -> dict[str, Any]:
         """Return camera streaming metrics and consumer counts."""
@@ -284,6 +328,8 @@ class CameraService:
             "video_consumers": self.video_consumer_count,
             "producers": self.producer_count,
             "has_frame": self._latest_raw_jpeg is not None,
+            "is_real": self._is_real,
+            "health": self.get_health(),
             "last_frame_age_sec": round(time.time() - self._latest_frame_time, 2)
             if self._latest_frame_time > 0
             else None,

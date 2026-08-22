@@ -40,6 +40,11 @@ class Settings:
     ANALYTICS_SAMPLE_LIMIT: int = int(os.getenv("ANALYTICS_SAMPLE_LIMIT", "500"))
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "sih_navis.db")
 
+    # M6 Additions: Source Health, Stale Timeout & Adapter Settings
+    STALE_TIMEOUT_SEC: float = float(os.getenv("STALE_TIMEOUT_SEC", "3.0"))
+    CAMERA_MAX_FRAME_SIZE: int = int(os.getenv("CAMERA_MAX_FRAME_SIZE", str(10 * 1024 * 1024)))
+    SOURCE_MODE: str = os.getenv("SOURCE_MODE", "AUTO")  # "AUTO", "MOCK", "REAL"
+
     # Logging level
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
