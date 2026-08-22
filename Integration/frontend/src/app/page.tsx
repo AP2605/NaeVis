@@ -29,7 +29,7 @@ import { Mission, TrajectoryData } from "../types/telemetry";
 export default function DashboardPage() {
   const apiBaseUrl = "http://localhost:8000";
   const wsTelemetryUrl = "ws://localhost:8000/ws/telemetry";
-  const wsCameraUrl = "ws://localhost:8000/ws/camera?role=viewer";
+  const wsCameraUrl = "ws://localhost:8000/ws/video";
 
   const {
     isConnected: isTelemetryConnected,
