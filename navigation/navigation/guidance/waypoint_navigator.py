@@ -226,9 +226,13 @@ class WaypointNavigator:
 
         # Yaw error wrapped to [-180, 180]
         yaw_err = (target_yaw_deg - current_yaw_deg + 180.0) % 360.0 - 180.0
-        # Proportional yaw turn rate
-        k_yaw = 2.0
-        yaw_rate_cmd = float(np.clip(k_yaw * yaw_err, -self.max_yaw_rate, self.max_yaw_rate))
+        # Proportional yaw turn rate with deadband to prevent hunting
+        if abs(yaw_err) < 2.5:
+            yaw_rate_cmd = 0.0
+            target_yaw_deg = current_yaw_deg
+        else:
+            k_yaw = 1.8
+            yaw_rate_cmd = float(np.clip(k_yaw * yaw_err, -self.max_yaw_rate, self.max_yaw_rate))
 
         # 4. Smooth Velocity Profiling (Acceleration & Braking)
         cruise_speed = target_wp.speed_mps
@@ -269,8 +273,12 @@ class WaypointNavigator:
                 cte = float(cross_prod / seg_len)
 
         return {
+            "type": "waypoint",
             "active_waypoint_idx": self.current_wp_idx + 1,
             "active_waypoint_name": target_wp.name,
+            "target_x": round(float(target_pos[0]), 4),
+            "target_y": round(float(target_pos[1]), 4),
+            "target_z": round(float(target_pos[2]), 4),
             "distance_to_waypoint_m": round(dist_3d, 3),
             "cross_track_error_m": round(cte, 3),
             "desired_velocity_mps": round(desired_speed, 2),

@@ -161,17 +161,29 @@ class NavigationEngine:
                 unit_t = vo_res["relative_t"] / max(1e-6, np.linalg.norm(vo_res["relative_t"]))
                 self.scale_estimator.estimate_scale(unit_t, dt=dt)
 
-                # Transform Camera Optical Frame [xc, yc, zc] to Body Navigation Frame [xb, yb, zb]
+                # Check for high angular rotation (Rotation Gating to prevent epipolar spikes)
+                yaw_rate = abs(float(gyro[2]))
+                is_turning = yaw_rate > 0.30  # rad/s
+
+                # Transform incremental translation: Camera Optical [xc, yc, zc] -> Body [xb, yb, zb]
                 # Optical: +Z fwd, +X right, +Y down -> Body: +X fwd (+Z), +Y left (-X), +Z up (-Y)
-                raw_vo = vo_res["position"]
-                body_vo_t = np.array([raw_vo[2], -raw_vo[0], -raw_vo[1]], dtype=np.float64)
-                world_vo_pos = self.initial_world_pos + body_vo_t
+                rel_t = (vo_res["relative_t"] * current_scale).flatten()
+                rel_body_t = np.array([rel_t[2], -rel_t[0], -rel_t[1]], dtype=np.float64)
+
+                # Rotate incremental body translation by active EKF rotation matrix into world frame
+                R_wb = ekf_state["rotation_matrix"]
+                delta_world_t = (R_wb @ rel_body_t).flatten()
+
+                if is_turning:
+                    world_vo_pos = (ekf_state["position"] + delta_world_t * 0.1).flatten()
+                else:
+                    world_vo_pos = (ekf_state["position"] + delta_world_t).flatten()
 
                 # 7. EKF Measurement Update Step (Driven by VO)
                 ekf_state = self.ekf.update_vo_pose(
                     pos_vo=world_vo_pos,
                     quat_vo=vo_res["orientation_quat"],
-                    confidence=confidence
+                    confidence=confidence if not is_turning else 0.4
                 )
             elif sim_pos is not None:
                 ekf_state["position"] = sim_pos

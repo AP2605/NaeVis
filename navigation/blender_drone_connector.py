@@ -291,12 +291,15 @@ class BlenderDroneBridge:
         self.prev_pos = current_pos
         self.prev_vel = velocity
 
-        # Gyroscope
+        # Gyroscope (Shortest angular difference in radians / second)
         if self.prev_euler is not None:
+            d_roll = (math.radians(roll - self.prev_euler[0]) + math.pi) % (2.0 * math.pi) - math.pi
+            d_pitch = (math.radians(pitch - self.prev_euler[1]) + math.pi) % (2.0 * math.pi) - math.pi
+            d_yaw = (math.radians(yaw - self.prev_euler[2]) + math.pi) % (2.0 * math.pi) - math.pi
             gyro = [
-                round(math.radians(roll - self.prev_euler[0]) / dt, 4),
-                round(math.radians(pitch - self.prev_euler[1]) / dt, 4),
-                round(math.radians(yaw - self.prev_euler[2]) / dt, 4)
+                round(d_roll / dt, 4),
+                round(d_pitch / dt, 4),
+                round(d_yaw / dt, 4)
             ]
         else:
             gyro = [0.0, 0.0, 0.0]
@@ -354,6 +357,21 @@ class BlenderDroneBridge:
         target_roll_deg = float(command.get("target_roll_deg", 0.0))
         target_pitch_deg = float(command.get("target_pitch_deg", 0.0))
         climb_rate = float(command.get("climb_rate_mps", 0.0))
+
+        # Check for explicit 3D target coordinates from P3
+        target_x = command.get("target_x")
+        target_y = command.get("target_y")
+        target_z = command.get("target_z")
+
+        if target_x is not None and target_y is not None:
+            dx = float(target_x) - drone.location.x
+            dy = float(target_y) - drone.location.y
+            dz = (float(target_z) - drone.location.z) if target_z is not None else 0.0
+            dist_xy = math.hypot(dx, dy)
+            if dist_xy > 0.3:
+                target_yaw_deg = math.degrees(math.atan2(dy, dx))
+            if target_z is not None:
+                climb_rate = max(-2.0, min(2.0, dz * 1.2))
 
         # 1. Smooth Yaw Heading (Aerodynamic rate-limited turning)
         target_yaw_rad = math.radians(target_yaw_deg)
