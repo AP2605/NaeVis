@@ -452,7 +452,14 @@ class NavigationStreamServer:
         if self.enable_mock:
             asyncio.create_task(self.mock_simulation_loop())
 
-        async with websockets.serve(self.router, self.host, self.port):
+        async with websockets.serve(
+            self.router,
+            self.host,
+            self.port,
+            ping_interval=20,
+            ping_timeout=20,
+            max_size=10_000_000
+        ):
             await asyncio.Future()  # run forever
 
 

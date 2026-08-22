@@ -186,6 +186,7 @@ class BlenderDroneBridge:
     def __init__(self, drone_name=DRONE_OBJECT_NAME, camera_name=CAMERA_OBJECT_NAME):
         self.drone_name = drone_name
         self.camera_name = camera_name
+        self.initial_pos = None
         self.prev_pos = None
         self.prev_vel = None
         self.prev_time = time.time()
@@ -268,7 +269,7 @@ class BlenderDroneBridge:
         current_pos = [x, y, z]
 
         # Anchor origin on first frame
-        if self.initial_pos is None:
+        if not hasattr(self, "initial_pos") or self.initial_pos is None:
             self.initial_pos = [x, y, z]
 
         rel_x = x - self.initial_pos[0]
