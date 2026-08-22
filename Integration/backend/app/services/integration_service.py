@@ -33,9 +33,9 @@ class IntegrationService:
     def __init__(self):
         self.sync = frame_synchronizer
 
-    async def ingest_p1(self, packet: P1VisionResult) -> IntegratedFrame:
+    async def ingest_p1(self, packet: P1VisionResult, is_real: bool = False) -> IntegratedFrame:
         """Ingest P1 perception packet, update synchronizer, and broadcast."""
-        frame = self.sync.ingest_p1(packet)
+        frame = self.sync.ingest_p1(packet, is_real=is_real)
         # Broadcast perception event to WebSocket clients
         event = PerceptionEvent(data=packet)
         await connection_manager.broadcast_json(event)
@@ -44,9 +44,9 @@ class IntegrationService:
         await connection_manager.broadcast_json(IntegratedStateEvent(data=state))
         return frame
 
-    async def ingest_p2(self, packet: SimulationGroundTruthPacket) -> IntegratedFrame:
+    async def ingest_p2(self, packet: SimulationGroundTruthPacket, is_real: bool = False) -> IntegratedFrame:
         """Ingest P2 ground truth packet, update synchronizer, record trajectory, and broadcast."""
-        frame = self.sync.ingest_p2(packet)
+        frame = self.sync.ingest_p2(packet, is_real=is_real)
         
         # Record ground truth point in trajectory repository
         from app.repositories.trajectory_repository import trajectory_repository
@@ -78,9 +78,9 @@ class IntegrationService:
         await connection_manager.broadcast_json(IntegratedStateEvent(data=state))
         return frame
 
-    async def ingest_p3(self, packet: NavigationStatePacket) -> IntegratedFrame:
+    async def ingest_p3(self, packet: NavigationStatePacket, is_real: bool = False) -> IntegratedFrame:
         """Ingest P3 navigation state packet, update synchronizer, trajectory, analytics, and broadcast."""
-        frame = self.sync.ingest_p3(packet)
+        frame = self.sync.ingest_p3(packet, is_real=is_real)
 
         # Record estimated pose point in trajectory repository
         from app.repositories.trajectory_repository import trajectory_repository

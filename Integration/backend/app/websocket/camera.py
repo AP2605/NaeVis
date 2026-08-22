@@ -24,19 +24,26 @@ async def websocket_camera(
         default="viewer",
         description="'viewer' for dashboard displays, 'producer' for frame sources",
     ),
+    source: str = Query(
+        default="auto",
+        description="'real' for verified teammate stream, 'mock' for synthetic, 'auto' for config-based",
+    ),
 ) -> None:
     """WebSocket endpoint for camera frame streaming (backward compatible).
 
     - Producers push binary image frames (or structured binary packets).
     - Viewers receive image frames directly without JSON encoding overhead.
     """
+    from app.config import settings
+    is_real = (source.lower() == "real") or (settings.SOURCE_MODE.upper() == "REAL")
+
     if role.lower() == "producer":
         await camera_service.register_producer(websocket)
         try:
             while True:
                 data = await websocket.receive_bytes()
                 if data:
-                    await camera_service.ingest_and_broadcast_frame(data)
+                    await camera_service.ingest_and_broadcast_frame(data, is_real=is_real)
         except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         except Exception as exc:
@@ -51,7 +58,7 @@ async def websocket_camera(
                 message = await websocket.receive()
                 if "bytes" in message and message["bytes"]:
                     # Ingest if client pushes bytes
-                    await camera_service.ingest_and_broadcast_frame(message["bytes"])
+                    await camera_service.ingest_and_broadcast_frame(message["bytes"], is_real=is_real)
                 elif "text" in message and message["text"]:
                     if message["text"] == "ping":
                         await websocket.send_text("pong")
@@ -95,6 +102,10 @@ async def websocket_video(
         default="viewer",
         description="'viewer' for frontend video display, 'producer' for frame sources",
     ),
+    source: str = Query(
+        default="auto",
+        description="'real' for verified teammate stream, 'mock' for synthetic, 'auto' for config-based",
+    ),
 ) -> None:
     """WebSocket endpoint dedicated for Frontend Live Video displays and Real P2 Camera Feed.
 
@@ -102,13 +113,16 @@ async def websocket_video(
     - Frontend connects to ws://<P4-LAN-IP>:8000/ws/video (or /ws/camera) to receive live frames.
     - Supports both explicit role='producer' and implicit auto-promotion when binary frames are received.
     """
+    from app.config import settings
+    is_real = (source.lower() == "real") or (settings.SOURCE_MODE.upper() == "REAL")
+
     if role.lower() == "producer":
         await camera_service.register_producer(websocket)
         try:
             while True:
                 data = await websocket.receive_bytes()
                 if data:
-                    await camera_service.ingest_and_broadcast_frame(data)
+                    await camera_service.ingest_and_broadcast_frame(data, is_real=is_real)
         except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         except Exception as exc:
@@ -129,7 +143,7 @@ async def websocket_video(
                         camera_service.unregister_video_consumer(websocket)
                         await camera_service.register_producer(websocket)
                         is_promoted_producer = True
-                    await camera_service.ingest_and_broadcast_frame(data)
+                    await camera_service.ingest_and_broadcast_frame(data, is_real=is_real)
                 elif "text" in message and message["text"]:
                     if message["text"] == "ping":
                         await websocket.send_text("pong")

@@ -69,3 +69,13 @@ def reset_integration_state():
 def get_camera_stats():
     """Return camera stream diagnostics."""
     return camera_service.get_stats()
+
+
+@router.get(
+    "/health",
+    summary="Get integration sources health",
+    description="Retrieve explicit operational states (CONNECTED, MOCK, STALE, DISCONNECTED) for P1, P2, P3, and Camera.",
+)
+def get_integration_health():
+    """Return health metrics and connection states for all sources."""
+    return frame_synchronizer.get_source_health()

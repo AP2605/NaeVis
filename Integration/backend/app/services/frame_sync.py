@@ -2,6 +2,7 @@
 
 Associates and aligns asynchronous packets from P1 (Perception), P2 (Simulation Ground Truth),
 and P3 (Navigation) using frame_id as primary key and timestamp as secondary reference.
+Provides detailed source health metrics, stale detection, and multi-producer diagnostics.
 """
 
 from collections import OrderedDict
@@ -10,10 +11,11 @@ import time
 from typing import Any
 
 from app.config import settings
-from app.schemas.integrated import IntegratedFrame, IntegratedState
+from app.schemas.integrated import IntegratedFrame, IntegratedState, SourceHealth
 from app.schemas.p1 import P1VisionResult
 from app.schemas.p2 import SimulationGroundTruthPacket
 from app.schemas.p3 import NavigationStatePacket
+from app.services.camera_service import camera_service
 
 logger = logging.getLogger("sih_navis.sync")
 
@@ -24,7 +26,7 @@ class FrameSynchronizer:
     def __init__(self, max_buffer_size: int = settings.FRAME_SYNC_BUFFER_SIZE):
         self.max_buffer_size = max_buffer_size
         self._frames: OrderedDict[int, IntegratedFrame] = OrderedDict()
-        
+
         # Latest received packets for instant state retrieval
         self._latest_p1: P1VisionResult | None = None
         self._latest_p2: SimulationGroundTruthPacket | None = None
@@ -40,6 +42,16 @@ class FrameSynchronizer:
         self._p1_fps: float = 0.0
         self._p2_fps: float = 0.0
         self._p3_fps: float = 0.0
+
+        # M6 Source Health and Real Module Origin Tracking
+        self._p1_is_real: bool = False
+        self._p2_is_real: bool = False
+        self._p3_is_real: bool = False
+
+        # Periodic logging tracking
+        self._p1_last_log_time: float = 0.0
+        self._p2_last_log_time: float = 0.0
+        self._p3_last_log_time: float = 0.0
 
     def _get_or_create_frame(self, frame_id: int, timestamp: float) -> IntegratedFrame:
         """Retrieve existing frame container or initialize a new one in the buffer."""
@@ -62,7 +74,7 @@ class FrameSynchronizer:
         self._frames[frame_id] = frame
         return frame
 
-    def ingest_p1(self, packet: P1VisionResult) -> IntegratedFrame:
+    def ingest_p1(self, packet: P1VisionResult, is_real: bool = False) -> IntegratedFrame:
         """Ingest and synchronize P1 perception packet."""
         now = time.time()
         if self._last_p1_time > 0:
@@ -72,21 +84,30 @@ class FrameSynchronizer:
         self._last_p1_time = now
         self._p1_count += 1
         self._latest_p1 = packet
+        if is_real:
+            self._p1_is_real = True
 
         frame = self._get_or_create_frame(packet.frame_id, packet.timestamp)
         frame.perception = packet
         if "p1" not in frame.sync_sources:
             frame.sync_sources.append("p1")
 
-        logger.info(
-            "[P1] Perception packet received | frame=%d | terrain=%s | landmarks=%d",
-            packet.frame_id,
-            packet.terrain.terrain_type,
-            len(packet.landmarks),
-        )
+        # Periodic summary logging
+        if (now - self._p1_last_log_time >= 5.0) or (self._p1_count % 20 == 0):
+            src_tag = "REAL" if self._p1_is_real else "MOCK"
+            logger.info(
+                "[P1 Perception] Ingested packet [%s] | frame=%d | terrain=%s | landmarks=%d | rate=%.1f Hz",
+                src_tag,
+                packet.frame_id,
+                packet.terrain.terrain_type,
+                len(packet.landmarks),
+                self._p1_fps,
+            )
+            self._p1_last_log_time = now
+
         return frame
 
-    def ingest_p2(self, packet: SimulationGroundTruthPacket) -> IntegratedFrame:
+    def ingest_p2(self, packet: SimulationGroundTruthPacket, is_real: bool = False) -> IntegratedFrame:
         """Ingest and synchronize P2 simulation ground truth packet."""
         now = time.time()
         if self._last_p2_time > 0:
@@ -96,6 +117,8 @@ class FrameSynchronizer:
         self._last_p2_time = now
         self._p2_count += 1
         self._latest_p2 = packet
+        if is_real:
+            self._p2_is_real = True
 
         frame_id = packet.frame_id if packet.frame_id is not None else self._p2_count
         frame = self._get_or_create_frame(frame_id, packet.timestamp)
@@ -105,16 +128,23 @@ class FrameSynchronizer:
         if "p2" not in frame.sync_sources:
             frame.sync_sources.append("p2")
 
-        logger.info(
-            "[P2] Ground truth packet received | frame=%d | pos=(%.2f, %.2f, %.2f)",
-            frame_id,
-            packet.position.x,
-            packet.position.y,
-            packet.position.z,
-        )
+        # Periodic summary logging
+        if (now - self._p2_last_log_time >= 5.0) or (self._p2_count % 50 == 0):
+            src_tag = "REAL" if self._p2_is_real else "MOCK"
+            logger.info(
+                "[P2 GroundTruth] Ingested packet [%s] | frame=%d | pos=(%.2f, %.2f, %.2f) | rate=%.1f Hz",
+                src_tag,
+                frame_id,
+                packet.position.x,
+                packet.position.y,
+                packet.position.z,
+                self._p2_fps,
+            )
+            self._p2_last_log_time = now
+
         return frame
 
-    def ingest_p3(self, packet: NavigationStatePacket) -> IntegratedFrame:
+    def ingest_p3(self, packet: NavigationStatePacket, is_real: bool = False) -> IntegratedFrame:
         """Ingest and synchronize P3 navigation state packet."""
         now = time.time()
         if self._last_p3_time > 0:
@@ -124,18 +154,27 @@ class FrameSynchronizer:
         self._last_p3_time = now
         self._p3_count += 1
         self._latest_p3 = packet
+        if is_real:
+            self._p3_is_real = True
 
         frame = self._get_or_create_frame(packet.frame_id, packet.timestamp)
         frame.navigation = packet
         if "p3" not in frame.sync_sources:
             frame.sync_sources.append("p3")
 
-        logger.info(
-            "[P3] Navigation packet received | frame=%d | state=%s | conf=%.2f",
-            packet.frame_id,
-            packet.tracking_state,
-            packet.confidence,
-        )
+        # Periodic summary logging
+        if (now - self._p3_last_log_time >= 5.0) or (self._p3_count % 50 == 0):
+            src_tag = "REAL" if self._p3_is_real else "MOCK"
+            logger.info(
+                "[P3 Navigation] Ingested packet [%s] | frame=%d | state=%s | conf=%.2f | rate=%.1f Hz",
+                src_tag,
+                packet.frame_id,
+                packet.tracking_state,
+                packet.confidence,
+                self._p3_fps,
+            )
+            self._p3_last_log_time = now
+
         return frame
 
     def get_frame(self, frame_id: int) -> IntegratedFrame | None:
@@ -146,6 +185,41 @@ class FrameSynchronizer:
         """Retrieve most recent integrated frames in chronological order."""
         sorted_frames = sorted(self._frames.values(), key=lambda f: f.frame_id)
         return sorted_frames[-limit:]
+
+    def get_source_health(self) -> dict[str, Any]:
+        """Compute detailed health and stale detection for all data sources."""
+        now = time.time()
+        stale_threshold = settings.STALE_TIMEOUT_SEC
+
+        def _calc_status(last_time: float, count: int, is_real: bool, fps: float, last_fid: int | None):
+            age = (now - last_time) if last_time > 0 else None
+            if count == 0 or last_time == 0:
+                state = "DISCONNECTED"
+            elif age is not None and age <= stale_threshold:
+                state = "CONNECTED" if is_real else "MOCK"
+            else:
+                state = "STALE"
+
+            return {
+                "state": state,
+                "is_real": is_real,
+                "last_packet_time": round(last_time, 3),
+                "packet_count": count,
+                "rate_hz": round(fps, 1),
+                "last_frame_id": last_fid,
+                "age_seconds": round(age, 2) if age is not None else None,
+            }
+
+        p1_fid = self._latest_p1.frame_id if self._latest_p1 else None
+        p2_fid = self._latest_p2.frame_id if self._latest_p2 else None
+        p3_fid = self._latest_p3.frame_id if self._latest_p3 else None
+
+        return {
+            "p1": _calc_status(self._last_p1_time, self._p1_count, self._p1_is_real, self._p1_fps, p1_fid),
+            "p2": _calc_status(self._last_p2_time, self._p2_count, self._p2_is_real, self._p2_fps, p2_fid),
+            "p3": _calc_status(self._last_p3_time, self._p3_count, self._p3_is_real, self._p3_fps, p3_fid),
+            "camera": camera_service.get_health(),
+        }
 
     def get_latest_integrated_state(self) -> IntegratedState:
         """Construct the latest composite state across all modules."""
@@ -176,10 +250,13 @@ class FrameSynchronizer:
             "p3_rate_hz": round(self._p3_fps, 2),
         }
 
+        source_health = self.get_source_health()
+
         system_status: dict[str, Any] = {
-            "p1_active": (time.time() - self._last_p1_time < 3.0) if self._last_p1_time > 0 else False,
-            "p2_active": (time.time() - self._last_p2_time < 3.0) if self._last_p2_time > 0 else False,
-            "p3_active": (time.time() - self._last_p3_time < 3.0) if self._last_p3_time > 0 else False,
+            "p1_active": source_health["p1"]["state"] in ("CONNECTED", "MOCK"),
+            "p2_active": source_health["p2"]["state"] in ("CONNECTED", "MOCK"),
+            "p3_active": source_health["p3"]["state"] in ("CONNECTED", "MOCK"),
+            "camera_active": source_health["camera"]["state"] in ("CONNECTED", "MOCK"),
         }
 
         return IntegratedState(
@@ -191,6 +268,7 @@ class FrameSynchronizer:
             latest_camera=camera_ref,
             sync_status=sync_status,
             system_status=system_status,
+            source_health=source_health,
         )
 
     def reset(self) -> None:
@@ -208,6 +286,12 @@ class FrameSynchronizer:
         self._p1_fps = 0.0
         self._p2_fps = 0.0
         self._p3_fps = 0.0
+        self._p1_is_real = False
+        self._p2_is_real = False
+        self._p3_is_real = False
+        self._p1_last_log_time = 0.0
+        self._p2_last_log_time = 0.0
+        self._p3_last_log_time = 0.0
         logger.info("Frame synchronizer state reset.")
 
 
