@@ -167,6 +167,20 @@ async def websocket_navigation_endpoint(
         logger.warning("[P3 WS] Socket session exception for %s: %s", client_host, exc)
 
 
+class SafeUvicornServer(uvicorn.Server):
+    """Custom Uvicorn Server subclass that does not invoke sys.exit upon startup bind errors."""
+
+    def install_signal_handlers(self) -> None:
+        pass
+
+    async def startup(self, sockets=None) -> None:
+        try:
+            await super().startup(sockets=sockets)
+        except (Exception, SystemExit) as exc:
+            self.should_exit = True
+            logger.warning("[P3 WS] Background listener could not bind to %s:%s: %s", self.config.host, self.config.port, exc)
+
+
 async def create_nav_server_async(host: str = settings.NAV_WS_HOST, port: int = settings.NAV_WS_PORT) -> uvicorn.Server:
     """Create and return configured Uvicorn Server instance for P3 navigation listener."""
     config = uvicorn.Config(
@@ -176,7 +190,7 @@ async def create_nav_server_async(host: str = settings.NAV_WS_HOST, port: int = 
         log_level="warning",
         access_log=False,
     )
-    return uvicorn.Server(config)
+    return SafeUvicornServer(config)
 
 
 def main():

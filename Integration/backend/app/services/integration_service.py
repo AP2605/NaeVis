@@ -73,6 +73,16 @@ class IntegrationService:
         # Broadcast ground truth event to WebSocket clients
         event = GroundTruthEvent(data=packet)
         await connection_manager.broadcast_json(event)
+
+        # Broadcast real-time analytics update
+        from app.services.analytics_service import analytics_service
+        metrics = analytics_service.compute_metrics()
+        await connection_manager.broadcast_json({
+            "event": "analytics",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": metrics.model_dump(),
+        })
+
         # Broadcast integrated state update
         state = self.sync.get_latest_integrated_state()
         await connection_manager.broadcast_json(IntegratedStateEvent(data=state))

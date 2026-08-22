@@ -18,9 +18,14 @@ Integration backend and real-time ground station service for the **SIH-NAVIS** G
                  P2 SENSORS                      /ws/video (PORT 8000)
              telemetry/control                binary JPEG (~15 FPS)
                       |                               |
-                      v                               v
-                   P3 SLAM                         P4 BACKEND
-            (navigation.server)             (camera fan-out & sync)
+                      v JSON WebSocket                |
+                 PORT 8005                            |
+               /ws/telemetry                          v
+                      |                           P4 BACKEND
+                      |                     (camera fan-out & sync)
+                      |                               |
+                   P3 SLAM                            |
+             (navigation.server)                      |
                       |                               |
                       v JSON WebSocket                |
                  PORT 8004                            |
@@ -30,7 +35,7 @@ Integration backend and real-time ground station service for the **SIH-NAVIS** G
                                       |
                                       v
                                P4 INTEGRATION
-                          (P3 Adapter & Sync Layer)
+                          (P2/P3 Adapter & Sync Layer)
                                       |
              +-----------------+-------------+-----------------+
              |   Telemetry     |  Analytics  | Mission Control |
@@ -53,15 +58,39 @@ Integration backend and real-time ground station service for the **SIH-NAVIS** G
 |---|---|---|---|---|---|
 | **P4 Main API & Camera** | `0.0.0.0` | `8000` | HTTP REST (`/api/v1/*`) & WS (`/ws/video`, `/ws/telemetry`) | In / Out | Main REST API, P2 camera stream, and Frontend telemetry broadcast |
 | **P4 Navigation Receiver** | `0.0.0.0` | `8004` | WebSocket (`/ws/navigation`) | Inbound | Dedicated high-throughput listener for P3 SLAM / Navigation telemetry |
+| **P4 Simulation GT Receiver** | `0.0.0.0` | `8005` | WebSocket (`/ws/telemetry`) | Inbound | Dedicated isolated listener for P2 Simulation Ground Truth telemetry |
 | **P4 Frontend Dashboard** | `0.0.0.0` | `3000` | HTTP / Next.js 14 Web App | Outbound | Interactive 3D ground station UI |
 
 ---
 
-## 2. P3 Navigation WebSocket Contract (`ws://<P4-IP>:8004/ws/navigation`)
+## 2. Telemetry WebSocket Contracts
 
-P3 SLAM transmits JSON text messages at its natural estimation rate.
+### P2 Ground Truth (`ws://<P4-IP>:8005/ws/telemetry`)
+```json
+{
+  "frame_id": 125,
+  "timestamp": 4.166,
+  "ground_truth": {
+    "x": 10.42,
+    "y": 5.81,
+    "z": 20.13,
+    "roll": 0.3,
+    "pitch": -1.1,
+    "yaw": 89.7
+  },
+  "velocity": {
+    "x": 3.2,
+    "y": 0.0,
+    "z": 0.1
+  },
+  "lidar": {
+    "front": 18.5,
+    "bottom": 12.0
+  }
+}
+```
 
-### Payload Schema
+### P3 Navigation (`ws://<P4-IP>:8004/ws/navigation`)
 ```json
 {
   "frame_id": 125,
@@ -93,7 +122,7 @@ P3 SLAM transmits JSON text messages at its natural estimation rate.
 Runs full simulation with mock producers for P1, P2 ground truth, P2 camera, and P3 navigation:
 
 ```powershell
-# 1. Start P4 Backend (starts both port 8000 and port 8004 listener)
+# 1. Start P4 Backend (starts port 8000, port 8004, and port 8005 listeners)
 cd Integration/backend
 .\venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
@@ -101,9 +130,9 @@ cd Integration/backend
 cd Integration/frontend
 npm run dev
 
-# 3. Start Mock Producers (P1, P2 GT, P2 Camera, P3 Nav WS)
+# 3. Start Mock Producers (P1 HTTP, P2 GT WS :8005, P2 Camera WS :8000, P3 Nav WS :8004)
 cd Integration/backend
-.\venv\Scripts\python mocks/run_all_mocks.py --p3-mode ws
+.\venv\Scripts\python mocks/run_all_mocks.py --p2-mode ws --p3-mode ws
 ```
 
 ### Mode B: Real Teammate Integration Mode (LAN)
@@ -115,26 +144,30 @@ When connecting real teammate machines over local network:
    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
 2. **P2 Blender Machine**:
-   Connects to `ws://<P4-LAN-IP>:8000/ws/video?source=real` pushing binary JPEG frames (~15 FPS).
+   - Camera video stream $\rightarrow$ `ws://<P4-LAN-IP>:8000/ws/video?source=real` (~15 FPS binary JPEG).
+   - Ground truth telemetry $\rightarrow$ `ws://<P4-LAN-IP>:8005/ws/telemetry?source=real` (6-DoF JSON).
 3. **P3 SLAM Machine**:
-   Connects to `ws://<P4-LAN-IP>:8004/ws/navigation?source=real` streaming JSON estimated pose packets.
+   - Navigation telemetry $\rightarrow$ `ws://<P4-LAN-IP>:8004/ws/navigation?source=real` (6-DoF estimated pose JSON).
 4. **P1 Perception Machine**:
-   Posts vision results to `http://<P4-LAN-IP>:8000/api/v1/perception/result?source=real`.
+   - Vision results $\rightarrow$ `http://<P4-LAN-IP>:8000/api/v1/perception/result?source=real`.
 5. **P4 Ground Station Operator**:
-   Opens `http://<P4-LAN-IP>:3000` (or `http://localhost:3000`).
+   - Dashboard UI $\rightarrow$ `http://<P4-LAN-IP>:3000` (or `http://localhost:3000`).
 
 ---
 
 ## 4. Windows Firewall & LAN Troubleshooting
 
-If incoming TCP connections to port 8000 or 8004 are blocked by Windows Firewall on the P4 host machine, run PowerShell as Administrator:
+If incoming TCP connections are blocked by Windows Firewall on the P4 host machine, run PowerShell as Administrator:
 
 ```powershell
-# Allow inbound TCP port 8000 (API + Video + Telemetry)
+# Allow inbound TCP port 8000 (API + Video + Frontend Telemetry)
 New-NetFirewallRule -DisplayName "P4 Main API and Video (8000)" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
 
 # Allow inbound TCP port 8004 (P3 Navigation WebSocket)
 New-NetFirewallRule -DisplayName "P4 Navigation Listener (8004)" -Direction Inbound -LocalPort 8004 -Protocol TCP -Action Allow
+
+# Allow inbound TCP port 8005 (P2 Simulation Ground Truth WebSocket)
+New-NetFirewallRule -DisplayName "P4 Simulation GT Listener (8005)" -Direction Inbound -LocalPort 8005 -Protocol TCP -Action Allow
 ```
 
 ---
@@ -168,6 +201,7 @@ New-NetFirewallRule -DisplayName "P4 Navigation Listener (8004)" -Direction Inbo
 
 | Port | Path | Direction | Payload Format | Description |
 |---|---|---|---|---|
+| `8005` | `/ws/telemetry` | Inbound (P2 $\rightarrow$ P4) | JSON Text | Dedicated P2 Ground Truth stream |
 | `8004` | `/ws/navigation` | Inbound (P3 $\rightarrow$ P4) | JSON Text | Dedicated P3 SLAM / Navigation stream |
 | `8000` | `/ws/video` | In / Out | Binary JPEG / NAVC | P2 Blender video stream & frontend display |
 | `8000` | `/ws/telemetry` | Outbound (P4 $\rightarrow$ UI) | JSON Events | 10 Hz telemetry, trajectory, analytics broadcast |
@@ -179,6 +213,6 @@ New-NetFirewallRule -DisplayName "P4 Navigation Listener (8004)" -Direction Inbo
 ## 6. Running Tests
 
 ```bash
-# Run complete test suite (98 tests across M1-M6 + P3 WS server)
+# Run complete test suite (115 tests across M1-M7: end-to-end sync, resilience, source health, and failure isolation)
 pytest tests/ -v
 ```

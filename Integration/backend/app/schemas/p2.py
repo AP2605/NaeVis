@@ -19,6 +19,7 @@ class SimulationGroundTruthPacket(BaseModel):
         default_factory=Orientation3D,
         description="Ground truth attitude in degrees (roll, pitch, yaw)"
     )
+    velocity: Position3D | None = Field(default=None, description="Ground truth linear velocity in m/s")
     lidar: LidarData | None = Field(default=None, description="Simulated LiDAR range measurements in meters")
     camera: CameraReference | None = Field(default=None, description="Camera frame metadata and image path reference")
 
@@ -46,6 +47,8 @@ class SimulationGroundTruthPacket(BaseModel):
                         "pitch": float(gt.get("pitch", 0.0)),
                         "yaw": float(gt.get("yaw", 0.0)),
                     }
+                if "velocity" in gt and "velocity" not in data:
+                    data["velocity"] = gt["velocity"]
         return data
 
     @model_validator(mode="after")
