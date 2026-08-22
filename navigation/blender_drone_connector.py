@@ -267,6 +267,14 @@ class BlenderDroneBridge:
 
         current_pos = [x, y, z]
 
+        # Anchor origin on first frame
+        if self.initial_pos is None:
+            self.initial_pos = [x, y, z]
+
+        rel_x = x - self.initial_pos[0]
+        rel_y = y - self.initial_pos[1]
+        rel_z = z - self.initial_pos[2]
+
         # Velocity
         if self.prev_pos is not None:
             velocity = [(current_pos[i] - self.prev_pos[i]) / dt for i in range(3)]
@@ -312,7 +320,8 @@ class BlenderDroneBridge:
             "type": "ground_truth",
             "frame_id": self.frame_id,
             "timestamp": round(self.frame_id * DT, 4),
-            "position": {"x": round(x, 4), "y": round(y, 4), "z": round(z, 4)},
+            "position": {"x": round(rel_x, 4), "y": round(rel_y, 4), "z": round(rel_z, 4)},
+            "global_position": {"x": round(x, 4), "y": round(y, 4), "z": round(z, 4)},
             "orientation": {"roll": round(roll, 4), "pitch": round(pitch, 4), "yaw": round(yaw, 4)},
             "velocity": {"x": round(velocity[0], 4), "y": round(velocity[1], 4), "z": round(velocity[2], 4)}
         }
@@ -327,9 +336,9 @@ class BlenderDroneBridge:
             },
             "imu": imu,
             "sim_position": {
-                "x": round(x, 4),
-                "y": round(y, 4),
-                "z": round(z, 4)
+                "x": round(rel_x, 4),
+                "y": round(rel_y, 4),
+                "z": round(rel_z, 4)
             }
         }
 

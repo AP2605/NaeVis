@@ -129,6 +129,14 @@ class NavigationEngine:
         camera_data = packet.get("camera", {})
         frame = self._load_camera_frame(camera_data)
 
+        # 4b. Parse Simulation Position (anchored to local origin)
+        sim_pos = None
+        if "sim_position" in packet and packet["sim_position"] is not None:
+            raw_sim_pos = self._parse_vector3(packet["sim_position"])
+            if not hasattr(self, "sim_origin") or self.sim_origin is None:
+                self.sim_origin = raw_sim_pos.copy()
+            sim_pos = raw_sim_pos - self.sim_origin
+
         tracking_state = "PREDICTING_IMU_ONLY"
         confidence = 0.50
 
@@ -152,8 +160,7 @@ class NavigationEngine:
                     quat_vo=vo_res["orientation_quat"],
                     confidence=confidence
                 )
-        elif "sim_position" in packet and packet["sim_position"] is not None:
-            sim_pos = self._parse_vector3(packet["sim_position"])
+        elif sim_pos is not None:
             ekf_state["position"] = sim_pos
             tracking_state = "SIMULATION_TRACKING"
             confidence = 0.98
