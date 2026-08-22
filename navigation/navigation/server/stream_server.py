@@ -529,15 +529,19 @@ def main():
     parser.add_argument("--view", action="store_true", help="Enable Live Cockpit HUD Video Window")
     parser.add_argument("--mock", action="store_true", help="Run in Mock Mode (Simulates 3D mission waypoint flight)")
     parser.add_argument("--straight", action="store_true", help="Run straight flight test mode for SLAM verification")
-    parser.add_argument("--scout", action="store_true", help="Use high-speed non-looping point-to-point scout trajectory")
+    parser.add_argument("--scout", action="store_true", help="Use scout trajectory (90m, 6 m/s)")
+    parser.add_argument("--fast", "--highspeed", action="store_true", help="Use long-range high-speed trajectory (1km, 30-50 m/s)")
 
     args = parser.parse_args()
 
+    fast_wp = os.path.join(root_dir, "navigation", "configs", "mission_waypoints_highspeed.json")
     scout_wp = os.path.join(root_dir, "navigation", "configs", "mission_waypoints_scout.json")
     default_wp = os.path.join(root_dir, "navigation", "configs", "mission_waypoints.json")
 
     if args.waypoints:
         wp_path = args.waypoints
+    elif args.fast and os.path.exists(fast_wp):
+        wp_path = fast_wp
     elif args.scout and os.path.exists(scout_wp):
         wp_path = scout_wp
     else:

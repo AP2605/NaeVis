@@ -118,7 +118,7 @@ class NavigationEngine:
         if "sim_position" in packet and packet["sim_position"] is not None:
             sim_pos = self._parse_vector3(packet["sim_position"])
 
-        # Initialize World Origin on first frame
+        # Initialize World Origin on first frame only
         if self.initial_world_pos is None:
             if sim_pos is not None:
                 self.initial_world_pos = sim_pos.copy()
@@ -126,10 +126,6 @@ class NavigationEngine:
                 self.initial_world_pos = np.array([0.0, 0.0, 0.0], dtype=np.float64)
             self.ekf.p = self.initial_world_pos.copy()
             self.guidance.anchor_to_world_origin(self.initial_world_pos)
-
-        # Keep EKF nominal position continuously anchored if sim_pos is provided
-        if sim_pos is not None:
-            self.ekf.p = sim_pos.copy()
 
         # 1. Parse IMU Data
         imu_data = packet.get("imu", {})

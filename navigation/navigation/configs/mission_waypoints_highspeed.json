@@ -1,0 +1,65 @@
+[
+  {
+    "id": 1,
+    "name": "High-Speed Climb & Initial Vector",
+    "x": 0.0,
+    "y": 0.0,
+    "z": 15.0,
+    "speed_mps": 15.0,
+    "acceptance_radius_m": 3.0
+  },
+  {
+    "id": 2,
+    "name": "Ridge Transit Corridor",
+    "x": 120.0,
+    "y": 45.0,
+    "z": 25.0,
+    "speed_mps": 35.0,
+    "acceptance_radius_m": 5.0
+  },
+  {
+    "id": 3,
+    "name": "Deep Canyon Sprint",
+    "x": 280.0,
+    "y": -70.0,
+    "z": 35.0,
+    "speed_mps": 48.0,
+    "acceptance_radius_m": 6.0
+  },
+  {
+    "id": 4,
+    "name": "Plateau Apex Overlook",
+    "x": 460.0,
+    "y": 85.0,
+    "z": 40.0,
+    "speed_mps": 50.0,
+    "acceptance_radius_m": 6.0
+  },
+  {
+    "id": 5,
+    "name": "Forward Valley Dash",
+    "x": 650.0,
+    "y": -40.0,
+    "z": 28.0,
+    "speed_mps": 42.0,
+    "acceptance_radius_m": 5.0
+  },
+  {
+    "id": 6,
+    "name": "Terminal Approach Deceleration",
+    "x": 820.0,
+    "y": 15.0,
+    "z": 12.0,
+    "speed_mps": 25.0,
+    "acceptance_radius_m": 4.0
+  },
+  {
+    "id": 7,
+    "name": "Distant Forward Base Touchdown",
+    "x": 950.0,
+    "y": 0.0,
+    "z": 2.0,
+    "speed_mps": 4.0,
+    "acceptance_radius_m": 1.5
+  }
+]
