@@ -141,6 +141,12 @@ def test_navigation_websocket_schema_validation_failure_resilience():
             "estimated_pose": {"x": 7.0, "y": 8.0, "z": 15.0},
         }
         ws.send_text(json.dumps(valid))
+        import time
+        for _ in range(10):
+            if frame_synchronizer._latest_p3 is not None and frame_synchronizer._latest_p3.frame_id == 31:
+                break
+            time.sleep(0.02)
+        assert frame_synchronizer._latest_p3 is not None
         assert frame_synchronizer._latest_p3.frame_id == 31
 
 

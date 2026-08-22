@@ -406,15 +406,144 @@ export function Navigation3DView({
       }
     : { roll: 0, pitch: 0, yaw: 0 };
 
-  // Trajectory Lines Arrays (mapped to Three.js coordinates)
+/**
+ * Advanced Trajectory Sanitizer & Smoother:
+ * 1. Monotonic Chronological Sorting by frame_id & timestamp (eradicates backward chord cuts).
+ * 2. Uninitialized Origin & Teleport Spike Filter (eradicates chords to 0,0,0 & isolated packet drops).
+ * 3. Stage 1 - 5-Point Coordinate Median Filter: Completely removes alternating high-frequency
+ *    sawtooth / comb jitter without shrinking path curvature.
+ * 4. Stage 2 - 7-Point Gaussian Spatial Kernel: Produces a continuous, silky-smooth trajectory curve.
+ */
+function processAndSmoothTrajectory(
+  rawPoints?: TrajectoryPoint[] | null,
+  isEstimated = false
+): [number, number, number][] {
+  if (!rawPoints || rawPoints.length === 0) return [];
+  if (rawPoints.length === 1) return [simToThree(rawPoints[0].x, rawPoints[0].y, rawPoints[0].z)];
+
+  // 1. Sort strictly chronologically
+  const sorted = [...rawPoints]
+    .filter((p) => p && typeof p.x === "number" && typeof p.y === "number" && typeof p.z === "number")
+    .sort(
+      (a, b) =>
+        (a.frame_id || 0) - (b.frame_id || 0) ||
+        (a.timestamp || 0) - (b.timestamp || 0)
+    );
+
+  if (sorted.length < 2) {
+    return sorted.map((p) => simToThree(p.x, p.y, p.z));
+  }
+
+  // 2. Remove uninitialized origin glitches, micro-jitter duplicates (<3cm), and extreme teleport spikes
+  const validPoints: [number, number, number][] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const pt = simToThree(sorted[i].x, sorted[i].y, sorted[i].z);
+
+    if (validPoints.length === 0) {
+      // Skip uninitialized origin (0, 0, 0) if more points exist
+      if (Math.abs(pt[0]) < 0.001 && Math.abs(pt[1]) < 0.001 && Math.abs(pt[2]) < 0.001 && sorted.length > 1) {
+        continue;
+      }
+      validPoints.push(pt);
+      continue;
+    }
+
+    const prev = validPoints[validPoints.length - 1];
+    const dist = Math.hypot(pt[0] - prev[0], pt[1] - prev[1], pt[2] - prev[2]);
+
+    // Skip duplicate or near-zero steps (< 3cm) except for the latest tip
+    if (dist < 0.03 && i < sorted.length - 1) continue;
+
+    // Skip anomalous teleports (> 20m) unless confirmed by subsequent points
+    if (dist > 20.0 && i + 1 < sorted.length) {
+      const nextPt = simToThree(sorted[i + 1].x, sorted[i + 1].y, sorted[i + 1].z);
+      const distToNext = Math.hypot(nextPt[0] - prev[0], nextPt[1] - prev[1], nextPt[2] - prev[2]);
+      if (distToNext < 10.0) {
+        // Isolated single-frame glitch spike, discard
+        continue;
+      }
+    }
+
+    validPoints.push(pt);
+  }
+
+  if (validPoints.length < 4 || !isEstimated) {
+    return validPoints;
+  }
+
+  // 3. Stage 1: 5-Point Median Filter (completely removes alternating sawtooth / comb spikes)
+  const medianFiltered: [number, number, number][] = [];
+  const n = validPoints.length;
+
+  for (let i = 0; i < n; i++) {
+    if (i < 2 || i >= n - 2) {
+      medianFiltered.push(validPoints[i]);
+      continue;
+    }
+
+    const winX = [
+      validPoints[i - 2][0],
+      validPoints[i - 1][0],
+      validPoints[i][0],
+      validPoints[i + 1][0],
+      validPoints[i + 2][0],
+    ].sort((a, b) => a - b);
+
+    const winY = [
+      validPoints[i - 2][1],
+      validPoints[i - 1][1],
+      validPoints[i][1],
+      validPoints[i + 1][1],
+      validPoints[i + 2][1],
+    ].sort((a, b) => a - b);
+
+    const winZ = [
+      validPoints[i - 2][2],
+      validPoints[i - 1][2],
+      validPoints[i][2],
+      validPoints[i + 1][2],
+      validPoints[i + 2][2],
+    ].sort((a, b) => a - b);
+
+    medianFiltered.push([winX[2], winY[2], winZ[2]]);
+  }
+
+  // 4. Stage 2: 7-Point Gaussian Spatial Filter (creates silky-smooth aerodynamic trajectory)
+  const smoothed: [number, number, number][] = [];
+  const m = medianFiltered.length;
+  const weights = [0.06, 0.12, 0.20, 0.24, 0.20, 0.12, 0.06];
+
+  for (let i = 0; i < m; i++) {
+    // Strictly preserve origin and the active drone tip point
+    if (i === 0 || i === m - 1) {
+      smoothed.push(medianFiltered[i]);
+      continue;
+    }
+
+    let sumX = 0, sumY = 0, sumZ = 0, totalW = 0;
+    for (let k = -3; k <= 3; k++) {
+      const idx = i + k;
+      if (idx >= 0 && idx < m) {
+        const w = weights[k + 3];
+        sumX += medianFiltered[idx][0] * w;
+        sumY += medianFiltered[idx][1] * w;
+        sumZ += medianFiltered[idx][2] * w;
+        totalW += w;
+      }
+    }
+    smoothed.push([sumX / totalW, sumY / totalW, sumZ / totalW]);
+  }
+
+  return smoothed;
+}
+
+  // Trajectory Lines Arrays (mapped to Three.js coordinates with chronological sorting and dual-stage smoothing)
   const estTrajPoints = useMemo(() => {
-    if (!trajectoryHistory?.estimated) return [];
-    return trajectoryHistory.estimated.map((p) => simToThree(p.x, p.y, p.z));
+    return processAndSmoothTrajectory(trajectoryHistory?.estimated, true);
   }, [trajectoryHistory?.estimated]);
 
   const gtTrajPoints = useMemo(() => {
-    if (!trajectoryHistory?.ground_truth) return [];
-    return trajectoryHistory.ground_truth.map((p) => simToThree(p.x, p.y, p.z));
+    return processAndSmoothTrajectory(trajectoryHistory?.ground_truth, false);
   }, [trajectoryHistory?.ground_truth]);
 
   // Handle View Reset / Preset Views
