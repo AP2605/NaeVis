@@ -1,18 +1,21 @@
 """
-NAVIS BLENDER DRONE SIMULATION + TELEMETRY + VIDEO STREAM
-=========================================================
+NAVIS BLENDER DRONE SIMULATION + TELEMETRY + VIDEO + GROUND TRUTH
+=================================================================
 
-P3 SLAM Navigation Server:
-    ws://10.110.7.32:8765/ws/sensors
+Multi-Node Pipeline:
+  1. P3 SLAM Server (Port 8765):
+     ws://10.110.7.32:8765/ws/sensors  --> Sensor Telemetry & 6-DOF Autonomous Steering
+  2. P4 Video Stream (Port 8000):
+     ws://10.110.7.40:8000/ws/video    --> Raw Binary JPEG Frames from Camera.001
+  3. P4 Ground Truth Stream (Port 8000):
+     ws://10.110.7.40:8000/ws/groundtruth --> True 6-DOF Simulation Pose & Velocity
 
-P4 Dashboard Video Stream:
-    ws://10.110.7.40:8000/ws/camera?role=producer  (or ws://10.110.7.40:8000/ws/video)
-
-Robust Multi-Node Implementation:
-    1. Safe non-blocking socket handling (never disconnects on timeout).
-    2. Auto-reconnection every 2 seconds if connection is lost.
-    3. Cross-platform OpenGL camera capture.
-    4. 6-DOF aerodynamic banked turns, pitch tilt, and inertial damping.
+Merged Features:
+  - Non-blocking Background Video & Ground Truth Streaming Threads.
+  - Base64 Frame Encoding in SensorPacket for P3 Visual Odometry / SLAM.
+  - Safe Non-blocking Socket Handling (Zero drops/disconnects on transient timeouts).
+  - 6-DOF Aerodynamic Banked Turns, Cruise Pitch Tilt & Inertial Smoothing.
+  - Cross-Platform OpenGL/Scene Render Frame Capture (Windows & Linux).
 """
 
 import bpy
@@ -23,10 +26,11 @@ import os
 import threading
 import queue
 import socket
+import base64
 import websocket
 
 # ============================================================
-# CONFIGURATION
+# CONFIGURATION — TEAM NETWORK IPS
 # ============================================================
 
 # P3 Server IP (SLAM Navigation & Autopilot)
@@ -37,50 +41,61 @@ P4_BACKEND_IP = "10.110.7.40"
 
 # Target WebSockets
 SERVER_WS_URL = f"ws://{P3_SERVER_IP}:8765/ws/sensors"
-# Live camera POV video directly to P4 Dashboard (Port 8000)
-VIDEO_WS_URL = f"ws://{P4_BACKEND_IP}:8000/ws/camera?role=producer"
+VIDEO_WS_URL = f"ws://{P4_BACKEND_IP}:8000/ws/video"
+GROUNDTRUTH_WS_URL = f"ws://{P4_BACKEND_IP}:8000/ws/groundtruth"
 
+# Blender Objects
 DRONE_OBJECT_NAME = "UAV_ROOT"
 CAMERA_OBJECT_NAME = "Camera.001"
 
+# Simulation Rate
 FPS = 30
 DT = 1.0 / FPS
 
+# Camera Resolution
 VIDEO_WIDTH = 640
 VIDEO_HEIGHT = 360
 JPEG_QUALITY = 60
 
+
 # ============================================================
-# GLOBAL VIDEO STATE
+# QUEUES & GLOBAL THREAD STATE
 # ============================================================
 
 video_queue = queue.Queue(maxsize=1)
-video_thread = None
+groundtruth_queue = queue.Queue(maxsize=2)
+
 video_running = False
+groundtruth_running = False
+
+video_thread = None
+groundtruth_thread = None
+
 video_ws = None
+groundtruth_ws = None
+sensor_ws = None
 
 
 # ============================================================
-# VIDEO THREAD (NON-BLOCKING)
+# BACKGROUND SENDER: VIDEO (BINARY JPEG)
 # ============================================================
 
 def video_sender_thread():
     global video_running, video_ws
-
-    print(f"[VIDEO] Video streamer thread started targeting: {VIDEO_WS_URL}")
+    print(f"[VIDEO] Streamer thread started targeting: {VIDEO_WS_URL}")
 
     while video_running:
         try:
-            frame = video_queue.get(timeout=0.5)
+            jpeg_bytes = video_queue.get(timeout=0.5)
         except queue.Empty:
             continue
 
         try:
             if video_ws is None:
                 video_ws = websocket.create_connection(VIDEO_WS_URL, timeout=3.0)
-                print(f"[VIDEO SUCCESS] Connected to P4 video endpoint: {VIDEO_WS_URL}")
+                print(f"[VIDEO SUCCESS] Connected to P4: {VIDEO_WS_URL}")
 
-            video_ws.send(frame, opcode=websocket.ABNF.OPCODE_BINARY)
+            video_ws.send(jpeg_bytes, opcode=websocket.ABNF.OPCODE_BINARY)
 
         except Exception:
             try:
@@ -101,16 +116,65 @@ def start_video_thread():
     video_thread.start()
 
 
-def stop_video_thread():
-    global video_running, video_ws
+# ============================================================
+# BACKGROUND SENDER: GROUND TRUTH (JSON)
+# ============================================================
+
+def groundtruth_sender_thread():
+    global groundtruth_running, groundtruth_ws
+    print(f"[GROUND TRUTH] Streamer thread started targeting: {GROUNDTRUTH_WS_URL}")
+
+    while groundtruth_running:
+        try:
+            data = groundtruth_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+
+        try:
+            if groundtruth_ws is None:
+                groundtruth_ws = websocket.create_connection(GROUNDTRUTH_WS_URL, timeout=3.0)
+                print(f"[GROUND TRUTH SUCCESS] Connected to P4: {GROUNDTRUTH_WS_URL}")
+
+            groundtruth_ws.send(json.dumps(data))
+
+        except Exception:
+            try:
+                if groundtruth_ws:
+                    groundtruth_ws.close()
+            except Exception:
+                pass
+            groundtruth_ws = None
+            time.sleep(2.0)
+
+
+def start_groundtruth_thread():
+    global groundtruth_running, groundtruth_thread
+    if groundtruth_running:
+        return
+    groundtruth_running = True
+    groundtruth_thread = threading.Thread(target=groundtruth_sender_thread, daemon=True)
+    groundtruth_thread.start()
+
+
+def stop_threads():
+    global video_running, groundtruth_running, video_ws, groundtruth_ws
     video_running = False
+    groundtruth_running = False
+
     try:
         if video_ws:
             video_ws.close()
     except Exception:
         pass
+    try:
+        if groundtruth_ws:
+            groundtruth_ws.close()
+    except Exception:
+        pass
+
     video_ws = None
-    print("[VIDEO] Sender thread stopped.")
+    groundtruth_ws = None
+    print("[THREADS] Background video and ground truth threads stopped.")
 
 
 # ============================================================
@@ -130,12 +194,16 @@ class BlenderDroneBridge:
         self._drone_obj = None
 
     def find_and_bind_drone(self):
-        if self.drone_name in bpy.data.objects:
-            self._drone_obj = bpy.data.objects[self.drone_name]
-            return self._drone_obj
+        # 1. Try explicit names
+        for name in [self.drone_name, "UAV_ROOT", "UAV_Root", "UAV_root", "Drone", "drone"]:
+            if name in bpy.data.objects:
+                self._drone_obj = bpy.data.objects[name]
+                return self._drone_obj
+        # 2. Check active object if not camera
         if bpy.context.active_object and bpy.context.active_object.type != 'CAMERA':
             self._drone_obj = bpy.context.active_object
             return self._drone_obj
+        # 3. Search keywords
         for o in bpy.data.objects:
             if o.type != 'CAMERA' and any(k in o.name.lower() for k in ["uav", "drone", "quad", "root", "body"]):
                 self._drone_obj = o
@@ -154,11 +222,10 @@ class BlenderDroneBridge:
     def get_camera_object(self):
         return bpy.data.objects.get(self.camera_name) or bpy.context.scene.camera
 
-    def capture_video_frame(self):
-        global video_queue
+    def capture_frame(self):
         camera = self.get_camera_object()
         if camera is None:
-            return
+            return None
 
         scene = bpy.context.scene
         scene.camera = camera
@@ -166,117 +233,118 @@ class BlenderDroneBridge:
         scene.render.resolution_y = VIDEO_HEIGHT
         scene.render.resolution_percentage = 100
         scene.render.image_settings.file_format = 'JPEG'
+        scene.render.image_settings.color_mode = 'RGB'
         scene.render.image_settings.quality = JPEG_QUALITY
 
+        # Cross-platform safe temp path
         temp_dir = bpy.app.tempdir if hasattr(bpy.app, "tempdir") and bpy.app.tempdir else os.environ.get("TEMP", "/tmp")
-        temp_path = os.path.join(temp_dir, "blender_video_frame.jpg")
+        temp_path = os.path.join(temp_dir, "navis_render_frame.jpg")
 
         try:
             scene.render.filepath = temp_path
             bpy.ops.render.opengl(write_still=True)
 
             with open(temp_path, "rb") as f:
-                jpeg_bytes = f.read()
-
-            try:
-                if video_queue.full():
-                    video_queue.get_nowait()
-            except queue.Empty:
-                pass
-
-            try:
-                video_queue.put_nowait(jpeg_bytes)
-            except queue.Full:
-                pass
-
+                return f.read()
         except Exception:
-            pass
+            return None
 
-    def read_telemetry_and_imu(self):
+    def read_telemetry(self):
         drone = self.get_drone_object()
         current_time = time.time()
-        dt = max(current_time - self.prev_time, 1e-3)
+        dt = max(current_time - self.prev_time, 0.001)
         self.prev_time = current_time
         self.frame_id += 1
 
-        if drone is not None:
+        if drone:
             pos = drone.location
             rot = drone.rotation_euler
-            pos_vec = [float(pos.x), float(pos.y), float(pos.z)]
-            euler_deg = [math.degrees(rot.x), math.degrees(rot.y), math.degrees(rot.z)]
+            x, y, z = float(pos.x), float(pos.y), float(pos.z)
+            roll, pitch, yaw = math.degrees(rot.x), math.degrees(rot.y), math.degrees(rot.z)
         else:
-            pos_vec = [0.0, 0.0, 5.0]
-            euler_deg = [0.0, 0.0, 0.0]
+            x, y, z = 0.0, 0.0, 5.0
+            roll, pitch, yaw = 0.0, 0.0, 0.0
+
+        current_pos = [x, y, z]
 
         # Velocity
         if self.prev_pos is not None:
-            vel_vec = [(pos_vec[i] - self.prev_pos[i]) / dt for i in range(3)]
+            velocity = [(current_pos[i] - self.prev_pos[i]) / dt for i in range(3)]
         else:
-            vel_vec = [0.0, 0.0, 0.0]
+            velocity = [0.0, 0.0, 0.0]
 
         # Acceleration
         if self.prev_vel is not None:
-            acc_linear = [(vel_vec[i] - self.prev_vel[i]) / dt for i in range(3)]
+            acceleration = [(velocity[i] - self.prev_vel[i]) / dt for i in range(3)]
         else:
-            acc_linear = [0.0, 0.0, 0.0]
+            acceleration = [0.0, 0.0, 0.0]
 
-        self.prev_pos = list(pos_vec)
-        self.prev_vel = list(vel_vec)
+        self.prev_pos = current_pos
+        self.prev_vel = velocity
 
-        acc_specific_force = {
-            "x": round(acc_linear[0], 4),
-            "y": round(acc_linear[1], 4),
-            "z": round(acc_linear[2] + 9.81, 4)
+        # Gyroscope
+        if self.prev_euler is not None:
+            gyro = [
+                round(math.radians(roll - self.prev_euler[0]) / dt, 4),
+                round(math.radians(pitch - self.prev_euler[1]) / dt, 4),
+                round(math.radians(yaw - self.prev_euler[2]) / dt, 4)
+            ]
+        else:
+            gyro = [0.0, 0.0, 0.0]
+        self.prev_euler = [roll, pitch, yaw]
+
+        # IMU specific force
+        imu = {
+            "acceleration": {
+                "x": round(acceleration[0], 4),
+                "y": round(acceleration[1], 4),
+                "z": round(acceleration[2] + 9.81, 4)
+            },
+            "gyroscope": {
+                "x": gyro[0],
+                "y": gyro[1],
+                "z": gyro[2]
+            }
         }
 
-        # Gyroscope angular velocity (rad/s)
-        if hasattr(self, "prev_euler") and self.prev_euler is not None:
-            gyro_reading = {
-                "x": round(math.radians(euler_deg[0] - self.prev_euler[0]) / dt, 4),
-                "y": round(math.radians(euler_deg[1] - self.prev_euler[1]) / dt, 4),
-                "z": round(math.radians(euler_deg[2] - self.prev_euler[2]) / dt, 4),
-            }
-        else:
-            gyro_reading = {"x": 0.0, "y": 0.0, "z": 0.0}
-        self.prev_euler = list(euler_deg)
+        # Ground Truth Packet for P4
+        ground_truth = {
+            "type": "ground_truth",
+            "frame_id": self.frame_id,
+            "timestamp": round(self.frame_id * DT, 4),
+            "position": {"x": round(x, 4), "y": round(y, 4), "z": round(z, 4)},
+            "orientation": {"roll": round(roll, 4), "pitch": round(pitch, 4), "yaw": round(yaw, 4)},
+            "velocity": {"x": round(velocity[0], 4), "y": round(velocity[1], 4), "z": round(velocity[2], 4)}
+        }
 
+        # Sensor Packet for P3
         sensor_packet = {
             "frame_id": self.frame_id,
             "timestamp": round(self.frame_id * DT, 4),
             "camera": {
-                "image_path": f"frames/frame_{self.frame_id:06d}.jpg",
                 "width": VIDEO_WIDTH,
                 "height": VIDEO_HEIGHT
             },
-            "imu": {
-                "acceleration": acc_specific_force,
-                "gyroscope": gyro_reading
-            },
+            "imu": imu,
             "sim_position": {
-                "x": pos_vec[0],
-                "y": pos_vec[1],
-                "z": pos_vec[2]
+                "x": round(x, 4),
+                "y": round(y, 4),
+                "z": round(z, 4)
             }
-        }
-
-        ground_truth = {
-            "position": {"x": pos_vec[0], "y": pos_vec[1], "z": pos_vec[2]},
-            "orientation": {"roll": euler_deg[0], "pitch": euler_deg[1], "yaw": euler_deg[2]},
-            "velocity": {"x": vel_vec[0], "y": vel_vec[1], "z": vel_vec[2]}
         }
 
         return sensor_packet, ground_truth
 
-    def apply_flight_command(self, flight_cmd):
+    def apply_flight_command(self, command):
         drone = self.get_drone_object()
-        if drone is None or not flight_cmd:
+        if drone is None or not command:
             return
 
-        speed = float(flight_cmd.get("desired_velocity_mps", 0.0))
-        target_yaw_deg = float(flight_cmd.get("target_heading_yaw_deg", 0.0))
-        target_roll_deg = float(flight_cmd.get("target_roll_deg", 0.0))
-        target_pitch_deg = float(flight_cmd.get("target_pitch_deg", 0.0))
-        climb_rate = float(flight_cmd.get("climb_rate_mps", 0.0))
+        speed = float(command.get("desired_velocity_mps", 0.0))
+        target_yaw_deg = float(command.get("target_heading_yaw_deg", 0.0))
+        target_roll_deg = float(command.get("target_roll_deg", 0.0))
+        target_pitch_deg = float(command.get("target_pitch_deg", 0.0))
+        climb_rate = float(command.get("climb_rate_mps", 0.0))
 
         # 1. Smooth Yaw Heading (Aerodynamic rate-limited turning)
         target_yaw_rad = math.radians(target_yaw_deg)
@@ -320,9 +388,7 @@ class BlenderDroneBridge:
 # WEBSOCKET CLIENT TO P3 SLAM
 # ============================================================
 
-sensor_ws = None
-
-def connect_sensor_server():
+def connect_p3():
     global sensor_ws
     try:
         sensor_ws = websocket.create_connection(SERVER_WS_URL, timeout=3.0)
@@ -331,6 +397,34 @@ def connect_sensor_server():
     except Exception as e:
         sensor_ws = None
         return False
+
+
+def queue_video(jpeg_bytes):
+    if jpeg_bytes is None:
+        return
+    try:
+        if video_queue.full():
+            video_queue.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        video_queue.put_nowait(jpeg_bytes)
+    except queue.Full:
+        pass
+
+
+def queue_ground_truth(data):
+    if data is None:
+        return
+    try:
+        if groundtruth_queue.full():
+            groundtruth_queue.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        groundtruth_queue.put_nowait(data)
+    except queue.Full:
+        pass
 
 
 # ============================================================
@@ -353,25 +447,37 @@ class NAVIS_OT_DroneSimulationModal(bpy.types.Operator):
             return {'CANCELLED'}
 
         if event.type == 'TIMER':
-            # 1. Read Drone Telemetry & IMU
-            packet, gt = self.bridge.read_telemetry_and_imu()
+            # 1. READ TELEMETRY & IMU + GROUND TRUTH
+            sensor_packet, ground_truth = self.bridge.read_telemetry()
 
-            # 2. Render and push video frame
+            # 2. CAPTURE CAMERA FRAME
+            jpeg_bytes = None
             if self.bridge.frame_id % 2 == 0:
-                self.bridge.capture_video_frame()
+                jpeg_bytes = self.bridge.capture_frame()
 
-            # 3. Auto-Reconnect to P3 SLAM server if disconnected
+            # 3. QUEUE VIDEO TO P4 DASHBOARD
+            if jpeg_bytes is not None:
+                queue_video(jpeg_bytes)
+
+            # 4. QUEUE GROUND TRUTH TO P4 DASHBOARD
+            queue_ground_truth(ground_truth)
+
+            # 5. AUTO-RECONNECT TO P3 IF DISCONNECTED
             now = time.time()
             if sensor_ws is None and (now - self.last_reconnect_time > 2.0):
                 self.last_reconnect_time = now
-                connect_sensor_server()
+                connect_p3()
 
-            # 4. Send packet to P3 and receive flight command
+            # 6. SEND TO P3 SLAM & RECEIVE AUTONOMOUS FLIGHT COMMAND
             flight_cmd = {}
             if sensor_ws is not None:
                 try:
-                    sensor_ws.send(json.dumps(packet))
-                    
+                    if jpeg_bytes is not None:
+                        sensor_packet["camera"]["image_base64"] = base64.b64encode(jpeg_bytes).decode("utf-8")
+                        sensor_packet["camera"]["format"] = "jpeg"
+
+                    sensor_ws.send(json.dumps(sensor_packet))
+
                     # Safe non-blocking receive (timeout 0.3s)
                     sensor_ws.settimeout(0.3)
                     try:
@@ -381,8 +487,8 @@ class NAVIS_OT_DroneSimulationModal(bpy.types.Operator):
                             flight_cmd = data.get("flight_command", {})
                             self.bridge.apply_flight_command(flight_cmd)
                     except (websocket.WebSocketTimeoutException, socket.timeout, TimeoutError, BlockingIOError):
-                        # Transient timeout on high load: Keep connection alive!
                         pass
+
                 except Exception as e:
                     print(f"[P3 SLAM Disconnect Error]: {e}")
                     try:
@@ -391,28 +497,27 @@ class NAVIS_OT_DroneSimulationModal(bpy.types.Operator):
                         pass
                     sensor_ws = None
 
-            # 5. Force 3D Viewport Live Redraw
+            # 7. FORCE 3D VIEWPORT LIVE REDRAW
             for window in context.window_manager.windows:
                 for area in window.screen.areas:
                     if area.type == 'VIEW_3D':
                         area.tag_redraw()
 
-            # 6. Status Report
+            # 8. STATUS LOGGING
             if self.bridge.frame_id % 15 == 0:
-                drone = self.bridge.get_drone_object()
-                loc = drone.location if drone else [0, 0, 0]
+                pos = ground_truth["position"]
                 p3_status = "ONLINE" if sensor_ws is not None else "CONNECTING..."
+                vid_status = "ONLINE" if video_ws is not None else "OFFLINE"
+                gt_status = "ONLINE" if groundtruth_ws is not None else "OFFLINE"
                 wp = flight_cmd.get("active_waypoint_idx", "-")
-                self.report({'INFO'}, f"Frame #{packet['frame_id']:04d} | Drone '{drone.name if drone else 'None'}': ({loc[0]:.1f}, {loc[1]:.1f}, {loc[2]:.1f})m | WP #{wp} | P3: {p3_status}")
+                self.report({'INFO'}, f"Frame #{self.bridge.frame_id:04d} | Pos: ({pos['x']:.1f}, {pos['y']:.1f}, {pos['z']:.1f})m | WP #{wp} | P3: {p3_status} | Video: {vid_status} | GT: {gt_status}")
 
         return {'PASS_THROUGH'}
 
     def execute(self, context):
-        # Start Video Thread
         start_video_thread()
-
-        # Connect to P3
-        connect_sensor_server()
+        start_groundtruth_thread()
+        connect_p3()
 
         wm = context.window_manager
         self._timer = wm.event_timer_add(DT, window=context.window)
@@ -420,13 +525,14 @@ class NAVIS_OT_DroneSimulationModal(bpy.types.Operator):
 
         drone = self.bridge.find_and_bind_drone()
         print("\n" + "=" * 65)
-        print("         NAVIS BLENDER DRONE SIMULATION + VIDEO BRIDGE   ")
+        print("    NAVIS BLENDER DRONE SIMULATION (VIDEO + GT + P3 SLAM)   ")
         print("=" * 65)
-        print(f" [DRONE OBJECT]:  '{drone.name if drone else 'None'}'")
-        print(f" [CAMERA OBJECT]: '{CAMERA_OBJECT_NAME}'")
-        print(f" [P3 SLAM URL]:   {SERVER_WS_URL}")
-        print(f" [VIDEO WS URL]:  {VIDEO_WS_URL}")
-        print(f" [SIMULATION]:    {FPS} FPS (DT = {DT:.4f}s)")
+        print(f" [DRONE OBJECT]:       '{drone.name if drone else 'None'}'")
+        print(f" [CAMERA OBJECT]:      '{CAMERA_OBJECT_NAME}'")
+        print(f" [P3 SLAM URL]:        {SERVER_WS_URL}")
+        print(f" [P4 VIDEO URL]:       {VIDEO_WS_URL}")
+        print(f" [P4 GROUNDTRUTH URL]: {GROUNDTRUTH_WS_URL}")
+        print(f" [SIMULATION]:         {FPS} FPS (DT = {DT:.4f}s)")
         print(" [INFO] Press ESC in 3D Viewport to stop.")
         print("=" * 65 + "\n")
 
@@ -438,13 +544,16 @@ class NAVIS_OT_DroneSimulationModal(bpy.types.Operator):
         if self._timer is not None:
             wm.event_timer_remove(self._timer)
             self._timer = None
-        stop_video_thread()
+
+        stop_threads()
+
         if sensor_ws is not None:
             try:
                 sensor_ws.close()
             except Exception:
                 pass
             sensor_ws = None
+
         print("\n[Navis Blender Bridge] Simulation stopped.\n")
 
 
@@ -456,7 +565,11 @@ def register():
     print("[Navis] Operator registered successfully.")
 
 def unregister():
-    bpy.utils.unregister_class(NAVIS_OT_DroneSimulationModal)
+    stop_threads()
+    try:
+        bpy.utils.unregister_class(NAVIS_OT_DroneSimulationModal)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
