@@ -31,13 +31,15 @@ function SourceStatusBadge({
   icon: Icon,
   health,
   fallbackActive,
+  isCamera = false,
 }: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   health?: SourceHealth;
   fallbackActive?: boolean;
+  isCamera?: boolean;
 }) {
-  const state = health?.state ?? (fallbackActive ? "MOCK" : "DISCONNECTED");
+  const state = health?.state ?? (fallbackActive ? "CONNECTED" : "DISCONNECTED");
   const isReal = health?.is_real ?? false;
   const rate = health?.rate_hz ?? 0;
 
@@ -45,26 +47,42 @@ function SourceStatusBadge({
   let dotClass = "bg-slate-600";
   let displayState: string = state;
 
-  if (state === "CONNECTED" || (isReal && state === "MOCK")) {
-    badgeClass = "bg-emerald-950/70 text-emerald-300 border-emerald-500/40";
-    dotClass = "bg-emerald-400 animate-pulse";
-    displayState = "REAL / ONLINE";
-  } else if (state === "MOCK") {
-    badgeClass = "bg-cyan-950/70 text-cyan-300 border-cyan-500/40";
-    dotClass = "bg-cyan-400 animate-pulse";
-    displayState = "MOCK SIM";
-  } else if (state === "STALE") {
-    badgeClass = "bg-amber-950/70 text-amber-300 border-amber-500/40";
-    dotClass = "bg-amber-400";
-    displayState = "STALE (NO DATA)";
-  } else if (state === "ERROR") {
-    badgeClass = "bg-rose-950/70 text-rose-300 border-rose-500/40";
-    dotClass = "bg-rose-500";
-    displayState = "ERROR";
+  if (isCamera) {
+    if (fallbackActive || state === "CONNECTED" || state === "MOCK" || rate > 0) {
+      badgeClass = "bg-emerald-950/70 text-emerald-300 border-emerald-500/40";
+      dotClass = "bg-emerald-400 animate-pulse";
+      displayState = "LIVE";
+    } else if (state === "STALE") {
+      badgeClass = "bg-amber-950/70 text-amber-300 border-amber-500/40";
+      dotClass = "bg-amber-400";
+      displayState = "STALE";
+    } else {
+      badgeClass = "bg-slate-950/90 text-slate-500 border-slate-800/80";
+      dotClass = "bg-slate-600";
+      displayState = "OFFLINE";
+    }
   } else {
-    badgeClass = "bg-slate-950/90 text-slate-500 border-slate-800/80";
-    dotClass = "bg-slate-600";
-    displayState = "OFFLINE";
+    if (state === "CONNECTED" || (isReal && state === "MOCK")) {
+      badgeClass = "bg-emerald-950/70 text-emerald-300 border-emerald-500/40";
+      dotClass = "bg-emerald-400 animate-pulse";
+      displayState = "ONLINE";
+    } else if (state === "MOCK") {
+      badgeClass = "bg-cyan-950/70 text-cyan-300 border-cyan-500/40";
+      dotClass = "bg-cyan-400 animate-pulse";
+      displayState = "SIMULATED";
+    } else if (state === "STALE") {
+      badgeClass = "bg-amber-950/70 text-amber-300 border-amber-500/40";
+      dotClass = "bg-amber-400";
+      displayState = "STALE";
+    } else if (state === "ERROR") {
+      badgeClass = "bg-rose-950/70 text-rose-300 border-rose-500/40";
+      dotClass = "bg-rose-500";
+      displayState = "ERROR";
+    } else {
+      badgeClass = "bg-slate-950/90 text-slate-500 border-slate-800/80";
+      dotClass = "bg-slate-600";
+      displayState = "OFFLINE";
+    }
   }
 
   return (
@@ -171,7 +189,7 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // Incrementally append live navigation point to trajectory trail on each frame
+  // Incrementally append live navigation point to trajectory trail on each frame in chronological order
   useEffect(() => {
     if (navigation?.estimated_pose) {
       const pt = {
@@ -185,17 +203,26 @@ export default function DashboardPage() {
         yaw: navigation.estimated_pose.yaw ?? 0,
       };
       setLiveEstimated((prev) => {
-        if (prev.length > 0 && prev[prev.length - 1].frame_id === pt.frame_id && pt.frame_id !== 0) {
-          const updated = [...prev];
-          updated[updated.length - 1] = pt;
-          return updated;
+        const next = [...prev];
+        const existingIdx = next.findIndex(
+          (p) => p.frame_id === pt.frame_id && pt.frame_id !== 0
+        );
+        if (existingIdx >= 0) {
+          next[existingIdx] = pt;
+          return next;
         }
-        return [...prev.slice(-499), pt];
+        next.push(pt);
+        next.sort(
+          (a, b) =>
+            (a.frame_id || 0) - (b.frame_id || 0) ||
+            (a.timestamp || 0) - (b.timestamp || 0)
+        );
+        return next.slice(-499);
       });
     }
   }, [navigation?.frame_id, navigation?.timestamp]);
 
-  // Incrementally append live ground truth point to trajectory trail on each frame
+  // Incrementally append live ground truth point to trajectory trail on each frame in chronological order
   useEffect(() => {
     if (groundTruth?.position) {
       const pt = {
@@ -209,12 +236,21 @@ export default function DashboardPage() {
         yaw: groundTruth.orientation?.yaw ?? 0,
       };
       setLiveGroundTruth((prev) => {
-        if (prev.length > 0 && prev[prev.length - 1].frame_id === pt.frame_id && pt.frame_id !== 0) {
-          const updated = [...prev];
-          updated[updated.length - 1] = pt;
-          return updated;
+        const next = [...prev];
+        const existingIdx = next.findIndex(
+          (p) => p.frame_id === pt.frame_id && pt.frame_id !== 0
+        );
+        if (existingIdx >= 0) {
+          next[existingIdx] = pt;
+          return next;
         }
-        return [...prev.slice(-499), pt];
+        next.push(pt);
+        next.sort(
+          (a, b) =>
+            (a.frame_id || 0) - (b.frame_id || 0) ||
+            (a.timestamp || 0) - (b.timestamp || 0)
+        );
+        return next.slice(-499);
       });
     }
   }, [groundTruth?.frame_id, groundTruth?.timestamp]);
@@ -277,7 +313,7 @@ export default function DashboardPage() {
                 NaeVis
               </h1>
               <span className="bg-cyan-950 border border-cyan-700/50 text-cyan-400 text-[10px] font-mono px-2 py-0.5 rounded tracking-wide font-medium">
-                P4 GROUND STATION
+                GROUND CONTROL STATION
               </span>
               {activeMission && (
                 <span className="bg-slate-800 text-slate-300 text-[10px] font-mono px-2 py-0.5 rounded border border-slate-700">
@@ -323,37 +359,38 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* M6 Real Integration & Source Health Status Banner */}
+      {/* Real-Time Subsystem Health & Stream Status Banner */}
       <div className="bg-slate-900/90 border border-slate-800/90 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex items-center gap-1.5 text-xs text-slate-400 font-semibold uppercase tracking-wider">
           <Activity className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Source Health:</span>
+          <span>Subsystem Health:</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <SourceStatusBadge
-            label="P1 Perception"
+            label="Perception"
             icon={Eye}
             health={integratedState?.source_health?.p1}
             fallbackActive={!!perception}
           />
           <SourceStatusBadge
-            label="P2 Simulation GT"
+            label="Ground Truth"
             icon={Layers}
             health={integratedState?.source_health?.p2}
             fallbackActive={!!groundTruth}
           />
           <SourceStatusBadge
-            label="P3 Navigation"
+            label="SLAM Navigation"
             icon={NavIcon}
             health={integratedState?.source_health?.p3}
             fallbackActive={!!navigation}
           />
           <SourceStatusBadge
-            label="P2 Camera"
+            label="Optical Camera"
             icon={Video}
             health={integratedState?.source_health?.camera}
             fallbackActive={isCameraConnected}
+            isCamera={true}
           />
         </div>
       </div>
