@@ -8,29 +8,30 @@ Integration backend and real-time ground station service for the **SIH-NAVIS** G
 
 ---
 
-## 1. Architecture Overview
+## 1. Architecture Overview & Port Separation
 
 ```text
                            P2 — BLENDER SIMULATION
                                       |
                       +---------------+---------------+
                       |                               |
-                /ws/sensors                      /ws/video
+                 P2 SENSORS                      /ws/video (PORT 8000)
              telemetry/control                binary JPEG (~15 FPS)
                       |                               |
                       v                               v
                    P3 SLAM                         P4 BACKEND
             (navigation.server)             (camera fan-out & sync)
                       |                               |
-                      v (estimated pose)              |
-             +--------+--------+                      |
-             |                 |                      |
-             v                 v                      v
-     /api/v1/navigation   /ws/telemetry       /ws/camera / /ws/video
-             |                 |                      |
-             +--------+--------+                      |
+                      v JSON WebSocket                |
+                 PORT 8004                            |
+              /ws/navigation                          |
                       |                               |
-                      v                               v
+                      +---------------+---------------+
+                                      |
+                                      v
+                               P4 INTEGRATION
+                          (P3 Adapter & Sync Layer)
+                                      |
              +-----------------+-------------+-----------------+
              |   Telemetry     |  Analytics  | Mission Control |
              +-----------------+-------------+-----------------+
@@ -46,15 +47,53 @@ Integration backend and real-time ground station service for the **SIH-NAVIS** G
       (640x480 video)  (Est vs GT Trails)  (ATE/RPE/Drift)   & Health
 ```
 
+### Dedicated Network Port Allocation
+
+| Module / Service | Host Binding | Port | Protocol & Endpoint | Direction | Description |
+|---|---|---|---|---|---|
+| **P4 Main API & Camera** | `0.0.0.0` | `8000` | HTTP REST (`/api/v1/*`) & WS (`/ws/video`, `/ws/telemetry`) | In / Out | Main REST API, P2 camera stream, and Frontend telemetry broadcast |
+| **P4 Navigation Receiver** | `0.0.0.0` | `8004` | WebSocket (`/ws/navigation`) | Inbound | Dedicated high-throughput listener for P3 SLAM / Navigation telemetry |
+| **P4 Frontend Dashboard** | `0.0.0.0` | `3000` | HTTP / Next.js 14 Web App | Outbound | Interactive 3D ground station UI |
+
 ---
 
-## 2. Modes of Operation
+## 2. P3 Navigation WebSocket Contract (`ws://<P4-IP>:8004/ws/navigation`)
 
-### Mode A: Mock / Regression Mode (Self-Contained)
-Runs P4 backend, frontend, and synthetic mock data producers without requiring teammate hardware:
+P3 SLAM transmits JSON text messages at its natural estimation rate.
+
+### Payload Schema
+```json
+{
+  "frame_id": 125,
+  "timestamp": 4.166,
+  "estimated_pose": {
+    "x": 10.42,
+    "y": 5.81,
+    "z": 20.13,
+    "roll": 0.3,
+    "pitch": -1.1,
+    "yaw": 89.7
+  },
+  "velocity": {
+    "x": 3.2,
+    "y": 0.0,
+    "z": 0.1
+  },
+  "tracking_state": "TRACKING_GOOD",
+  "confidence": 0.96,
+  "processing_time_ms": 0.4
+}
+```
+
+---
+
+## 3. Modes of Operation
+
+### Mode A: Mock / Self-Contained Mode
+Runs full simulation with mock producers for P1, P2 ground truth, P2 camera, and P3 navigation:
 
 ```powershell
-# 1. Start P4 Backend
+# 1. Start P4 Backend (starts both port 8000 and port 8004 listener)
 cd Integration/backend
 .\venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
@@ -62,33 +101,47 @@ cd Integration/backend
 cd Integration/frontend
 npm run dev
 
-# 3. Start Mock Producers (P1 + P2 + P3 + Camera)
+# 3. Start Mock Producers (P1, P2 GT, P2 Camera, P3 Nav WS)
 cd Integration/backend
-.\venv\Scripts\python mocks/run_all_mocks.py
+.\venv\Scripts\python mocks/run_all_mocks.py --p3-mode ws
 ```
 
-### Mode B: Real Teammate Integration Mode (LAN / Hardware-in-the-loop)
-When testing with real teammates over local network (LAN):
+### Mode B: Real Teammate Integration Mode (LAN)
+When connecting real teammate machines over local network:
 
-1. **P4 Backend**:
+1. **P4 Backend Host**:
    ```powershell
    cd Integration/backend
    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
-2. **P2 Blender Camera Feed**:
-   P2 Blender connects to `ws://<P4-LAN-IP>:8000/ws/video?source=real` pushing binary JPEG frames (~15 FPS).
-3. **P3 Navigation Engine**:
-   P3 transmits estimated poses to `http://<P4-LAN-IP>:8000/api/v1/navigation/state?source=real` or connects to `/ws/telemetry`.
-4. **P1 Perception Service**:
-   P1 posts vision results to `http://<P4-LAN-IP>:8000/api/v1/perception/result?source=real`.
-5. **P4 Dashboard**:
-   Open browser at `http://<P4-LAN-IP>:3000` (or `http://localhost:3000`).
+2. **P2 Blender Machine**:
+   Connects to `ws://<P4-LAN-IP>:8000/ws/video?source=real` pushing binary JPEG frames (~15 FPS).
+3. **P3 SLAM Machine**:
+   Connects to `ws://<P4-LAN-IP>:8004/ws/navigation?source=real` streaming JSON estimated pose packets.
+4. **P1 Perception Machine**:
+   Posts vision results to `http://<P4-LAN-IP>:8000/api/v1/perception/result?source=real`.
+5. **P4 Ground Station Operator**:
+   Opens `http://<P4-LAN-IP>:3000` (or `http://localhost:3000`).
 
 ---
 
-## 3. Endpoints & Protocol Reference
+## 4. Windows Firewall & LAN Troubleshooting
 
-### REST Endpoints
+If incoming TCP connections to port 8000 or 8004 are blocked by Windows Firewall on the P4 host machine, run PowerShell as Administrator:
+
+```powershell
+# Allow inbound TCP port 8000 (API + Video + Telemetry)
+New-NetFirewallRule -DisplayName "P4 Main API and Video (8000)" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
+
+# Allow inbound TCP port 8004 (P3 Navigation WebSocket)
+New-NetFirewallRule -DisplayName "P4 Navigation Listener (8004)" -Direction Inbound -LocalPort 8004 -Protocol TCP -Action Allow
+```
+
+---
+
+## 5. Endpoints & Protocol Reference
+
+### REST Endpoints (Port 8000)
 
 | Method | Path | Description |
 |---|---|---|
@@ -99,7 +152,7 @@ When testing with real teammates over local network (LAN):
 | `GET` | `/api/v1/perception/latest` | Retrieve latest P1 perception result |
 | `POST` | `/api/v1/simulation/ground-truth` | Ingest P2 simulation ground truth |
 | `GET` | `/api/v1/simulation/ground-truth/latest` | Retrieve latest P2 ground truth |
-| `POST` | `/api/v1/navigation/state` | Ingest P3 estimated pose & velocity |
+| `POST` | `/api/v1/navigation/state` | REST fallback for P3 navigation state |
 | `GET` | `/api/v1/navigation/state/latest` | Retrieve latest P3 navigation state |
 | `GET` | `/api/v1/integration/state` | Composite system state across all modules |
 | `GET` | `/api/v1/integration/health` | Explicit source health status (P1, P2, P3, Camera) |
@@ -113,46 +166,19 @@ When testing with real teammates over local network (LAN):
 
 ### WebSocket Endpoints
 
-| Protocol | Path | Direction | Description |
-|---|---|---|---|
-| `WS` | `/ws/telemetry` | Outbound | 10 Hz JSON broadcast of telemetry, integrated state, analytics, mission events |
-| `WS` | `/ws/video` | In / Out | High-throughput binary optical video stream for frontend viewer & P2 producer |
-| `WS` | `/ws/camera` | In / Out | Backward-compatible raw JPEG camera stream |
-| `WS` | `/ws/slam` | Outbound | Structured binary packets (`NAVC` header + JPEG payload) for visual SLAM |
-
----
-
-## 4. Source Health & Stale Detection
-
-Source health states are exposed via `/api/v1/integration/health` and live WebSocket updates:
-
-- `CONNECTED`: Actively receiving packets from verified real teammate source within `STALE_TIMEOUT_SEC`.
-- `MOCK`: Actively receiving packets from synthetic mock producers.
-- `STALE`: No packets received within `STALE_TIMEOUT_SEC` (default: 3.0s).
-- `DISCONNECTED`: No connection established or source terminated.
-- `ERROR`: Ingestion failed or malformed stream.
-
----
-
-## 5. Configuration Settings
-
-Configurable via environment variables (in `app/config.py`):
-
-| Variable | Default | Description |
-|---|---|---|
-| `P4_HOST` | `0.0.0.0` | Host binding for LAN accessibility |
-| `P4_PORT` | `8000` | Server HTTP/WebSocket port |
-| `STALE_TIMEOUT_SEC` | `3.0` | Timeout threshold in seconds before source becomes STALE |
-| `CAMERA_MAX_FRAME_SIZE` | `10485760` | Maximum allowable binary frame size (10 MB) |
-| `SOURCE_MODE` | `AUTO` | Source detection mode (`AUTO`, `MOCK`, `REAL`) |
-| `TELEMETRY_STREAM_INTERVAL` | `0.1` | Telemetry WebSocket push interval (10 Hz) |
-| `LOG_LEVEL` | `INFO` | Logging verbosity |
+| Port | Path | Direction | Payload Format | Description |
+|---|---|---|---|---|
+| `8004` | `/ws/navigation` | Inbound (P3 $\rightarrow$ P4) | JSON Text | Dedicated P3 SLAM / Navigation stream |
+| `8000` | `/ws/video` | In / Out | Binary JPEG / NAVC | P2 Blender video stream & frontend display |
+| `8000` | `/ws/telemetry` | Outbound (P4 $\rightarrow$ UI) | JSON Events | 10 Hz telemetry, trajectory, analytics broadcast |
+| `8000` | `/ws/camera` | In / Out | Binary JPEG | Legacy raw camera viewer stream |
+| `8000` | `/ws/slam` | Outbound | Binary NAVC | Synchronized video packets for SLAM |
 
 ---
 
 ## 6. Running Tests
 
 ```bash
-# Run complete test suite (91 tests across M1-M6)
+# Run complete test suite (98 tests across M1-M6 + P3 WS server)
 pytest tests/ -v
 ```

@@ -45,6 +45,12 @@ class Settings:
     CAMERA_MAX_FRAME_SIZE: int = int(os.getenv("CAMERA_MAX_FRAME_SIZE", str(10 * 1024 * 1024)))
     SOURCE_MODE: str = os.getenv("SOURCE_MODE", "AUTO")  # "AUTO", "MOCK", "REAL"
 
+    # P3 Dedicated Navigation WebSocket Listener Settings (Port 8004)
+    NAV_WS_HOST: str = os.getenv("P4_NAV_WS_HOST", "0.0.0.0")
+    NAV_WS_PORT: int = int(os.getenv("P4_NAV_WS_PORT", "8004"))
+    NAV_WS_PATH: str = os.getenv("P4_NAV_WS_PATH", "/ws/navigation")
+    AUTO_START_NAV_SERVER: bool = os.getenv("AUTO_START_NAV_SERVER", "true").lower() in ("true", "1", "yes")
+
     # Logging level
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 

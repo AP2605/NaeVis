@@ -4,6 +4,8 @@ Backend service for GPS-denied autonomous drone navigation simulation,
 providing telemetry ingestion, real-time streaming, and system integration.
 """
 
+import asyncio
+from contextlib import asynccontextmanager
 import logging
 import os
 from fastapi import FastAPI
@@ -30,10 +32,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sih_navis")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle and optional in-process P3 navigation listener."""
+    nav_server_task = None
+    nav_server_instance = None
+
+    if settings.AUTO_START_NAV_SERVER:
+        try:
+            from app.websocket.navigation_server import create_nav_server_async
+            nav_server_instance = await create_nav_server_async(
+                host=settings.NAV_WS_HOST, port=settings.NAV_WS_PORT
+            )
+            nav_server_task = asyncio.create_task(nav_server_instance.serve())
+            logger.info(
+                "Started dedicated P3 Navigation WebSocket Server on ws://%s:%d%s",
+                settings.NAV_WS_HOST,
+                settings.NAV_WS_PORT,
+                settings.NAV_WS_PATH,
+            )
+        except Exception as exc:
+            logger.warning("Could not auto-start P3 Navigation Server on port %d: %s", settings.NAV_WS_PORT, exc)
+
+    yield
+
+    if nav_server_instance is not None:
+        nav_server_instance.should_exit = True
+    if nav_server_task is not None:
+        nav_server_task.cancel()
+        try:
+            await nav_server_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     description=settings.APP_DESCRIPTION,
     version=settings.APP_VERSION,
+    lifespan=lifespan,
 )
 
 # Enable CORS for frontend integration

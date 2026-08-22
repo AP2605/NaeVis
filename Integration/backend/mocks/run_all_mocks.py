@@ -12,11 +12,14 @@ from mocks.mock_camera import MockCameraProducer
 from mocks.mock_p1 import MockP1Producer
 from mocks.mock_p2 import MockP2Producer
 from mocks.mock_p3 import MockP3Producer
+from mocks.mock_p3_ws_client import MockP3WebSocketClient
 
 
 async def run_producers(
     target_http: str,
     target_ws: str,
+    target_p3_ws: str,
+    p3_mode: str,
     p1_fps: float,
     p2_fps: float,
     p3_fps: float,
@@ -25,10 +28,11 @@ async def run_producers(
     no_cam: bool,
 ):
     print("=" * 65)
-    print("  SIH-NAVIS M3 Multi-Producer Simulation Suite")
+    print("  SIH-NAVIS Multi-Producer Simulation Suite (M6+)")
     print("=" * 65)
     print(f"  Target Backend HTTP: {target_http}")
     print(f"  Target Camera WS:    {target_ws}")
+    print(f"  Target P3 Nav WS:    {target_p3_ws} (Mode: {p3_mode.upper()})")
     print(f"  P1 Perception:       {p1_fps} Hz")
     print(f"  P2 Ground Truth:     {p2_fps} Hz")
     print(f"  P3 Navigation:       {p3_fps} Hz")
@@ -38,13 +42,18 @@ async def run_producers(
 
     p1 = MockP1Producer(target_url=target_http, fps=p1_fps, total_frames=frames)
     p2 = MockP2Producer(target_url=target_http, fps=p2_fps, total_frames=frames)
-    p3 = MockP3Producer(target_url=target_http, fps=p3_fps, total_frames=frames)
 
     tasks = [
         asyncio.create_task(p1.run()),
         asyncio.create_task(p2.run()),
-        asyncio.create_task(p3.run()),
     ]
+
+    if p3_mode.lower() == "ws":
+        p3_ws = MockP3WebSocketClient(ws_url=target_p3_ws, fps=p3_fps, total_frames=frames, source="mock")
+        tasks.append(asyncio.create_task(p3_ws.run()))
+    else:
+        p3_http = MockP3Producer(target_url=target_http, fps=p3_fps, total_frames=frames)
+        tasks.append(asyncio.create_task(p3_http.run()))
 
     if not no_cam:
         cam = MockCameraProducer(ws_url=target_ws, fps=cam_fps, total_frames=frames)
@@ -62,6 +71,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run all SIH-NAVIS mock data producers")
     parser.add_argument("--http", default="http://localhost:8000", help="P4 Backend HTTP URL")
     parser.add_argument("--ws", default="ws://localhost:8000/ws/camera?role=producer", help="Camera WebSocket URL")
+    parser.add_argument("--p3-ws", default="ws://127.0.0.1:8004/ws/navigation", help="P3 Navigation WebSocket URL")
+    parser.add_argument("--p3-mode", default="ws", choices=["ws", "http"], help="P3 transport mode (ws on port 8004 or http on port 8000)")
     parser.add_argument("--p1-fps", type=float, default=5.0, help="P1 Perception FPS")
     parser.add_argument("--p2-fps", type=float, default=20.0, help="P2 Simulation FPS")
     parser.add_argument("--p3-fps", type=float, default=20.0, help="P3 Navigation FPS")
@@ -75,6 +86,8 @@ def main():
             run_producers(
                 target_http=args.http,
                 target_ws=args.ws,
+                target_p3_ws=args.p3_ws,
+                p3_mode=args.p3_mode,
                 p1_fps=args.p1_fps,
                 p2_fps=args.p2_fps,
                 p3_fps=args.p3_fps,
