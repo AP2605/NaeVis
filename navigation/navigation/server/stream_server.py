@@ -3,18 +3,14 @@ Real-Time Telemetry & Simulation WebSocket Bridge Server (P3 Module).
 =====================================================================
 Central communication hub connecting Blender (P2), Navigation (P3), and Dashboard (P4):
   - Ingests high-rate `SensorPacket` stream from Blender (P2) on `/ws/sensors`.
-  - Or generates realistic Mission-Based synthetic 3D flight telemetry with --mock (No Blender required).
-  - Computes real-time 6-DOF state estimation and waypoint flight guidance.
+  - Computes real-time 6-DOF state estimation, VIO, and waypoint flight guidance (The Pilot).
   - Returns autonomous flight steering commands to Blender (P2).
   - Automatically streams real-time navigation telemetry to P4 on:
-      ws://10.247.227.40:8004/ws/navigation
+      ws://10.110.7.40:8004/ws/navigation
+  - Consumes optional synchronized binary camera frames from P4 on:
+      ws://10.110.7.40:8000/ws/slam (20-byte NAVC header)
   - Broadcasts `EstimatedPose` on local `/ws/telemetry`.
-  - Optional Live HUD Cockpit Video Window (--view).
-
-Usage:
-  python -m navigation.server.stream_server --host 0.0.0.0 --port 8765
-  python -m navigation.server.stream_server --mock --view
-  python -m navigation.server.stream_server --p4-ip 10.247.227.40 --mock
+  - Optional Live Cockpit HUD Video Window (--view).
 """
 
 import argparse
@@ -24,6 +20,7 @@ import math
 import os
 import sys
 import time
+import struct
 import cv2
 import numpy as np
 from typing import Set, Dict, Any, Optional
@@ -51,14 +48,18 @@ class NavigationStreamServer:
         self,
         host: str = "0.0.0.0",
         port: int = 8765,
-        p4_ip: str = "10.247.227.40",
+        p4_ip: str = "10.110.7.40",
         p4_port: int = 8004,
+        p4_video_port: int = 8000,
         waypoints_file: Optional[str] = None,
         enable_view: bool = False,
         enable_mock: bool = False
     ):
         self.host = host
         self.port = port
+        self.p4_ip = p4_ip
+        self.p4_port = p4_port
+        self.p4_video_port = p4_video_port
         self.p4_ws_url = f"ws://{p4_ip}:{p4_port}/ws/navigation"
         self.enable_view = enable_view
         self.enable_mock = enable_mock
@@ -114,7 +115,7 @@ class NavigationStreamServer:
 
         p4_stat = "P4: ONLINE" if self.p4_connected else "P4: CONNECTING"
         mode_str = "[MISSION MOCK]" if self.enable_mock else "[LIVE BLENDER]"
-        cv2.putText(vis, f"NAVIS GPS-DENIED AUTONOMOUS VIO {mode_str} | FRAME: #{fid:05d} | {p4_stat}", (15, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color_cyan, 1, cv2.LINE_AA)
+        cv2.putText(vis, f"NAVIS AUTONOMOUS GUIDANCE PILOT {mode_str} | FRAME: #{fid:05d} | {p4_stat}", (15, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color_cyan, 1, cv2.LINE_AA)
         cv2.putText(vis, f"STATE: {state} ({conf:.0f}%)", (w - 260, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.50, color_green, 1, cv2.LINE_AA)
 
         x = pose.get("x", 0.0)
@@ -162,9 +163,34 @@ class NavigationStreamServer:
                             await p4_ws.send(payload)
                         except Exception:
                             break
-            except Exception as e:
+            except Exception:
                 self.p4_connected = False
                 await asyncio.sleep(2.0)
+
+    async def p4_camera_consumer_loop(self):
+        """
+        Optional background task connecting to P4's binary camera stream at ws://<P4-IP>:8000/ws/slam
+        Decodes 20-byte NAVC header and passes synchronized frames into the SLAM pipeline.
+        """
+        header_format = ">4sIdI"
+        header_size = 20
+        p4_cam_url = f"ws://{self.p4_ip}:{self.p4_video_port}/ws/slam"
+
+        while True:
+            try:
+                async with websockets.connect(p4_cam_url, ping_interval=5, ping_timeout=5, max_size=10_000_000) as ws:
+                    print(f"[P4 -> P3 CAMERA] Connected to P4 SLAM binary stream: {p4_cam_url}")
+                    async for message in ws:
+                        if isinstance(message, bytes) and len(message) >= header_size:
+                            magic, frame_id, timestamp, payload_size = struct.unpack(header_format, message[:header_size])
+                            if magic == b"NAVC":
+                                jpeg_bytes = message[header_size:header_size + payload_size]
+                                np_arr = np.frombuffer(jpeg_bytes, np.uint8)
+                                decoded = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                                if decoded is not None:
+                                    self.latest_video_frame = decoded
+            except Exception:
+                await asyncio.sleep(3.0)
 
     async def mock_simulation_loop(self):
         """
@@ -176,7 +202,7 @@ class NavigationStreamServer:
         dt = 1.0 / fps
 
         # Drone simulated physical state
-        pos = np.array([0.0, 0.0, 0.0], dtype=float)
+        pos = np.array([726.03, 18.93, 101.91], dtype=float)
         current_yaw = 0.0
         current_roll = 0.0
         current_pitch = 0.0
@@ -212,14 +238,13 @@ class NavigationStreamServer:
             pos[0] += vx * dt
             pos[1] += vy * dt
             pos[2] += vz * dt
-            pos[2] = max(0.0, float(pos[2]))
 
             # 4. Handle Mission Completion & Auto-Restart
             if status == "MISSION_COMPLETED":
                 mission_restart_timer += 1
-                if mission_restart_timer > 90:  # Pause 3 seconds at landing, then restart mission
+                if mission_restart_timer > 90:  # Pause 3 seconds at landing, then restart
                     self.engine.guidance.reset()
-                    pos = np.array([0.0, 0.0, 0.0], dtype=float)
+                    pos = np.array([726.03, 18.93, 101.91], dtype=float)
                     current_yaw = 0.0
                     mission_restart_timer = 0
                     print("[Mock SLAM] Mission completed! Restarting mission cycle...")
@@ -250,11 +275,11 @@ class NavigationStreamServer:
                 },
                 "tracking_state": "TRACKING_GOOD",
                 "confidence": confidence,
-                "processing_time_ms": proc_time_ms
+                "processing_time_ms": proc_time_ms,
+                "flight_command": flight_cmd
             }
 
             output_packet = dict(p4_packet)
-            output_packet["flight_command"] = flight_cmd
             self.latest_output_packet = output_packet
 
             # Push to P4 Streamer Queue
@@ -340,7 +365,8 @@ class NavigationStreamServer:
                     dt_ms = (time.perf_counter() - t0) * 1000.0
                     self.latest_output_packet = output_packet
 
-                    # Build exact P4 JSON payload
+                    # Build exact P4 JSON payload matching to_see.md specification
+                    flight_cmd = output_packet.get("flight_command", {})
                     p4_packet = {
                         "frame_id": int(output_packet["frame_id"]),
                         "timestamp": float(output_packet["timestamp"]),
@@ -359,7 +385,8 @@ class NavigationStreamServer:
                         },
                         "tracking_state": str(output_packet["tracking_state"]),
                         "confidence": float(output_packet["confidence"]),
-                        "processing_time_ms": round(float(dt_ms), 2)
+                        "processing_time_ms": round(float(dt_ms), 2),
+                        "flight_command": flight_cmd
                     }
 
                     # Non-blocking push to P4 WebSocket streamer
@@ -378,8 +405,7 @@ class NavigationStreamServer:
                         frame_img = self.engine._load_camera_frame(data.get("camera", {}))
                         self.render_live_view(frame_img, output_packet)
 
-                    # Send autonomous flight command back to Blender
-                    flight_cmd = output_packet.get("flight_command", {})
+                    # Send autonomous flight command back to Blender (The Pilot)
                     response = {
                         "frame_id": output_packet["frame_id"],
                         "flight_command": flight_cmd,
@@ -397,9 +423,8 @@ class NavigationStreamServer:
 
                     if self.frame_counter % 15 == 0:
                         pose = output_packet["estimated_pose"]
-                        cmd = flight_cmd
                         p4_str = "[P4 Stream: OK]" if self.p4_connected else "[P4 Stream: Waiting]"
-                        print(f"[Server] Frame #{self.frame_counter:04d} | Pos: ({pose['x']:.2f}, {pose['y']:.2f}, {pose['z']:.2f}) m | Latency: {dt_ms:.1f}ms | Target WP: {cmd.get('active_waypoint_idx')} | {p4_str}")
+                        print(f"[Pilot] Frame #{self.frame_counter:04d} | Pos: ({pose['x']:.2f}, {pose['y']:.2f}, {pose['z']:.2f}) m | Target WP: {flight_cmd.get('active_waypoint_idx')} ({flight_cmd.get('active_waypoint_name')}) | Latency: {dt_ms:.1f}ms | {p4_str}")
 
                 except Exception as e:
                     print(f"[Server] Error processing packet: {e}")
@@ -426,7 +451,7 @@ class NavigationStreamServer:
             await self.register_telemetry_client(websocket)
 
     async def start(self):
-        """Starts the WebSocket server and P4 forwarder event loop."""
+        """Starts the WebSocket server, P4 forwarder and camera consumer loops."""
         if not WEBSOCKETS_AVAILABLE:
             print("\n[Server Error] 'websockets' library is not installed.")
             print("[Server Info] Please install it via: pip install websockets\n")
@@ -439,14 +464,16 @@ class NavigationStreamServer:
         print(f"  • P2 Blender Sensor Feed:  ws://{self.host}:{self.port}/ws/sensors")
         print(f"  • P2 Blender Video Stream: ws://{self.host}:{self.port}/ws/video")
         print(f"  • P4 Direct Stream Target: {self.p4_ws_url}")
+        print(f"  • P4 Binary Camera Source: ws://{self.p4_ip}:{self.p4_video_port}/ws/slam")
         if self.enable_mock:
             print(f"  • Mission Mock Mode:       ENABLED (Autonomous Waypoints)")
         if self.enable_view:
             print(f"  • Live Cockpit HUD Window: ENABLED")
         print("=" * 65 + "\n")
 
-        # Start P4 background streaming task
+        # Start P4 background tasks
         asyncio.create_task(self.p4_forwarder_loop())
+        asyncio.create_task(self.p4_camera_consumer_loop())
 
         # If mock mode enabled, start internal mission flight loop
         if self.enable_mock:
@@ -467,8 +494,9 @@ def main():
     parser = argparse.ArgumentParser(description="Navis Real-Time Telemetry Bridge Server.")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host address (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8765, help="Port number (default: 8765)")
-    parser.add_argument("--p4-ip", type=str, default="10.247.227.40", help="P4 Backend IP (default: 10.247.227.40)")
+    parser.add_argument("--p4-ip", type=str, default="10.110.7.40", help="P4 Backend IP (default: 10.110.7.40)")
     parser.add_argument("--p4-port", type=int, default=8004, help="P4 Navigation WebSocket port (default: 8004)")
+    parser.add_argument("--p4-video-port", type=int, default=8000, help="P4 Video port (default: 8000)")
     parser.add_argument("--waypoints", type=str, default=None, help="Path to mission waypoints JSON")
     parser.add_argument("--view", action="store_true", help="Enable Live Cockpit HUD Video Window")
     parser.add_argument("--mock", action="store_true", help="Run in Mock Mode (Simulates 3D mission waypoint flight)")
@@ -483,6 +511,7 @@ def main():
         port=args.port,
         p4_ip=args.p4_ip,
         p4_port=args.p4_port,
+        p4_video_port=args.p4_video_port,
         waypoints_file=wp_path,
         enable_view=args.view,
         enable_mock=args.mock
