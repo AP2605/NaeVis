@@ -529,11 +529,19 @@ def main():
     parser.add_argument("--view", action="store_true", help="Enable Live Cockpit HUD Video Window")
     parser.add_argument("--mock", action="store_true", help="Run in Mock Mode (Simulates 3D mission waypoint flight)")
     parser.add_argument("--straight", action="store_true", help="Run straight flight test mode for SLAM verification")
+    parser.add_argument("--scout", action="store_true", help="Use high-speed non-looping point-to-point scout trajectory")
 
     args = parser.parse_args()
 
+    scout_wp = os.path.join(root_dir, "navigation", "configs", "mission_waypoints_scout.json")
     default_wp = os.path.join(root_dir, "navigation", "configs", "mission_waypoints.json")
-    wp_path = args.waypoints if args.waypoints else (default_wp if os.path.exists(default_wp) else None)
+
+    if args.waypoints:
+        wp_path = args.waypoints
+    elif args.scout and os.path.exists(scout_wp):
+        wp_path = scout_wp
+    else:
+        wp_path = default_wp if os.path.exists(default_wp) else None
 
     server = NavigationStreamServer(
         host=args.host,

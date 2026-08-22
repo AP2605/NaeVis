@@ -1,0 +1,56 @@
+[
+  {
+    "id": 1,
+    "name": "Takeoff & Initial Climb",
+    "x": 0.0,
+    "y": 0.0,
+    "z": 5.0,
+    "speed_mps": 3.0,
+    "acceptance_radius_m": 0.6
+  },
+  {
+    "id": 2,
+    "name": "Ridge Entry Sector",
+    "x": 18.0,
+    "y": 8.0,
+    "z": 7.5,
+    "speed_mps": 5.0,
+    "acceptance_radius_m": 0.8
+  },
+  {
+    "id": 3,
+    "name": "Valley Recon Pass",
+    "x": 38.0,
+    "y": -12.0,
+    "z": 9.0,
+    "speed_mps": 6.0,
+    "acceptance_radius_m": 0.9
+  },
+  {
+    "id": 4,
+    "name": "Riverbank Overlook",
+    "x": 58.0,
+    "y": 14.0,
+    "z": 8.0,
+    "speed_mps": 5.5,
+    "acceptance_radius_m": 0.9
+  },
+  {
+    "id": 5,
+    "name": "Forward LZ Approach",
+    "x": 78.0,
+    "y": 4.0,
+    "z": 4.5,
+    "speed_mps": 4.0,
+    "acceptance_radius_m": 0.7
+  },
+  {
+    "id": 6,
+    "name": "Forward Outpost Touchdown",
+    "x": 90.0,
+    "y": 0.0,
+    "z": 1.5,
+    "speed_mps": 1.8,
+    "acceptance_radius_m": 0.5
+  }
+]

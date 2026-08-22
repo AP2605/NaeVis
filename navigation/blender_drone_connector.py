@@ -237,18 +237,22 @@ class BlenderDroneBridge:
         scene.render.image_settings.color_mode = 'RGB'
         scene.render.image_settings.quality = JPEG_QUALITY
 
-        # Cross-platform safe temp path
+        # 3-Frame Rotating Temp Buffer to prevent Windows file-lock collisions
         temp_dir = bpy.app.tempdir if hasattr(bpy.app, "tempdir") and bpy.app.tempdir else os.environ.get("TEMP", "/tmp")
-        temp_path = os.path.join(temp_dir, "navis_render_frame.jpg")
+        frame_idx = self.frame_id % 3
+        temp_path = os.path.join(temp_dir, f"navis_frame_{frame_idx}.jpg")
 
         try:
             scene.render.filepath = temp_path
             bpy.ops.render.opengl(write_still=True)
 
-            with open(temp_path, "rb") as f:
-                return f.read()
+            if os.path.exists(temp_path):
+                with open(temp_path, "rb") as f:
+                    data = f.read()
+                return data
         except Exception:
-            return None
+            pass
+        return None
 
     def read_telemetry(self):
         drone = self.get_drone_object()

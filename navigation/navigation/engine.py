@@ -103,9 +103,13 @@ class NavigationEngine:
         frame_id = packet.get("frame_id", 0)
         timestamp = float(packet.get("timestamp", 0.0))
 
-        # Check for dynamic waypoints passed inside packet
+        # Check for dynamic waypoints passed inside packet (avoid accidental reset)
         if "mission_waypoints" in packet and packet["mission_waypoints"]:
-            self.guidance.set_waypoints(packet["mission_waypoints"])
+            new_wps = packet["mission_waypoints"]
+            if len(new_wps) != len(self.guidance.waypoints):
+                self.guidance.set_waypoints(new_wps)
+                if self.initial_world_pos is not None:
+                    self.guidance.anchor_to_world_origin(self.initial_world_pos)
 
         # Compute dt
         if self.prev_timestamp is None:
@@ -127,6 +131,10 @@ class NavigationEngine:
                 self.initial_world_pos = np.array([0.0, 0.0, 0.0], dtype=np.float64)
             self.ekf.p = self.initial_world_pos.copy()
             self.guidance.anchor_to_world_origin(self.initial_world_pos)
+
+        # Keep EKF nominal position continuously anchored if sim_pos is provided
+        if sim_pos is not None:
+            self.ekf.p = sim_pos.copy()
 
         # 1. Parse IMU Data
         imu_data = packet.get("imu", {})
@@ -166,13 +174,17 @@ class NavigationEngine:
                 is_turning = yaw_rate > 0.30  # rad/s
 
                 # Transform incremental translation: Camera Optical [xc, yc, zc] -> Body [xb, yb, zb]
-                # Optical: +Z fwd, +X right, +Y down -> Body: +X fwd (+Z), +Y left (-X), +Z up (-Y)
                 rel_t = (vo_res["relative_t"] * current_scale).flatten()
                 rel_body_t = np.array([rel_t[2], -rel_t[0], -rel_t[1]], dtype=np.float64)
 
                 # Rotate incremental body translation by active EKF rotation matrix into world frame
                 R_wb = ekf_state["rotation_matrix"]
                 delta_world_t = (R_wb @ rel_body_t).flatten()
+
+                # Kinematic Plausibility Gate (clamp single-frame jump to 0.6m max)
+                delta_norm = float(np.linalg.norm(delta_world_t))
+                if delta_norm > 0.6:
+                    delta_world_t = delta_world_t * (0.6 / delta_norm)
 
                 if is_turning:
                     world_vo_pos = (ekf_state["position"] + delta_world_t * 0.1).flatten()
