@@ -3,7 +3,7 @@ Real-Time Telemetry & Simulation WebSocket Bridge Server (P3 Module).
 =====================================================================
 Central communication hub connecting Blender (P2), Navigation (P3), and Dashboard (P4):
   - Ingests high-rate `SensorPacket` stream from Blender (P2) on `/ws/sensors`.
-  - Or generates synthetic 6-DOF flight telemetry with --mock (No Blender required).
+  - Or generates realistic Mission-Based synthetic 3D flight telemetry with --mock (No Blender required).
   - Computes real-time 6-DOF state estimation and waypoint flight guidance.
   - Returns autonomous flight steering commands to Blender (P2).
   - Automatically streams real-time navigation telemetry to P4 on:
@@ -113,7 +113,7 @@ class NavigationStreamServer:
         vis = cv2.addWeighted(overlay, 0.75, vis, 0.25, 0)
 
         p4_stat = "P4: ONLINE" if self.p4_connected else "P4: CONNECTING"
-        mode_str = "[MOCK MODE]" if self.enable_mock else "[LIVE BLENDER]"
+        mode_str = "[MISSION MOCK]" if self.enable_mock else "[LIVE BLENDER]"
         cv2.putText(vis, f"NAVIS GPS-DENIED AUTONOMOUS VIO {mode_str} | FRAME: #{fid:05d} | {p4_stat}", (15, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color_cyan, 1, cv2.LINE_AA)
         cv2.putText(vis, f"STATE: {state} ({conf:.0f}%)", (w - 260, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.50, color_green, 1, cv2.LINE_AA)
 
@@ -129,7 +129,7 @@ class NavigationStreamServer:
         speed = flight_cmd.get("desired_velocity_mps", 0.0)
 
         cv2.putText(vis, f"POS: X:{x:+.1f}m  Y:{y:+.1f}m  ALT:{z:.1f}m | ATT: R:{roll:+.0f}° P:{pitch:+.0f}° Y:{yaw:+.0f}° | SPD:{speed:.1f}m/s", (15, h - 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color_white, 1, cv2.LINE_AA)
-        cv2.putText(vis, f"TARGET WAYPOINT: #{wp_idx} ({wp_name}) | DISTANCE: {dist:.1f}m", (15, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color_green, 1, cv2.LINE_AA)
+        cv2.putText(vis, f"MISSION WP: #{wp_idx} ({wp_name}) | DISTANCE: {dist:.1f}m", (15, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color_green, 1, cv2.LINE_AA)
 
         return vis
 
@@ -167,59 +167,86 @@ class NavigationStreamServer:
                 await asyncio.sleep(2.0)
 
     async def mock_simulation_loop(self):
-        """Generates realistic synthetic 3D flight trajectory and streams to P4 + Cockpit HUD."""
-        print("[Mock Engine] Starting Synthetic 3D Flight Simulation Loop @ 30 FPS...")
-        start_time = time.time()
-        radius = 20.0
-        ang_speed = 0.18
-        base_z = 10.0
+        """
+        Generates realistic synthetic 3D mission waypoint flight and streams to P4 + Cockpit HUD.
+        Executes waypoints: Takeoff -> Forest Inspection -> Bridge Overpass -> Home Base.
+        """
+        print("[Mock Engine] Starting Mission-Based 3D Flight Simulation Loop @ 30 FPS...")
+        fps = 30.0
+        dt = 1.0 / fps
+
+        # Drone simulated physical state
+        pos = np.array([0.0, 0.0, 0.0], dtype=float)
+        current_yaw = 0.0
+        current_roll = 0.0
+        current_pitch = 0.0
+        sim_time = 0.0
+        mission_restart_timer = 0
 
         while True:
             t0 = time.perf_counter()
             self.frame_counter += 1
-            elapsed = time.time() - start_time
-            sim_time = round(elapsed, 4)
+            sim_time += dt
 
-            # 3D Figure-8 Flight Trajectory with Altitude Variations
-            true_x = radius * math.sin(elapsed * ang_speed)
-            true_y = radius * math.sin(elapsed * ang_speed * 2) * 0.5
-            true_z = base_z + 3.0 * math.sin(elapsed * 0.25)
+            # 1. Compute autonomous flight command from WaypointNavigator
+            flight_cmd = self.engine.guidance.compute_flight_command(pos, current_yaw)
+            speed = float(flight_cmd.get("desired_velocity_mps", 0.0))
+            target_yaw = float(flight_cmd.get("target_heading_yaw_deg", 0.0))
+            target_roll = float(flight_cmd.get("target_roll_deg", 0.0))
+            target_pitch = float(flight_cmd.get("target_pitch_deg", 0.0))
+            climb_rate = float(flight_cmd.get("climb_rate_mps", 0.0))
+            status = flight_cmd.get("mission_status", "NAVIGATING")
 
-            # Simulated Velocity
-            vx = radius * ang_speed * math.cos(elapsed * ang_speed)
-            vy = radius * ang_speed * math.cos(elapsed * ang_speed * 2)
-            vz = 0.75 * math.cos(elapsed * 0.25)
-            speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+            # 2. Smooth 6-DOF Rotational Dynamics
+            yaw_diff = (target_yaw - current_yaw + 180.0) % 360.0 - 180.0
+            current_yaw = (current_yaw + yaw_diff * 0.12) % 360.0
+            current_roll += (target_roll - current_roll) * 0.15
+            current_pitch += (target_pitch - current_pitch) * 0.15
 
-            # Realistic 6-DOF Euler Attitude
-            yaw = math.degrees(math.atan2(vy, vx)) % 360.0
-            yaw_rate = ang_speed * (1.0 + math.cos(elapsed * ang_speed))
-            roll = float(np.clip(math.degrees(-math.atan2(speed * yaw_rate, 9.81)), -25.0, 25.0))
-            pitch = float(np.clip(-2.2 * speed, -18.0, 5.0))
+            # 3. 3D Kinematic Position Propagation
+            yaw_rad = math.radians(current_yaw)
+            vx = speed * math.cos(yaw_rad)
+            vy = speed * math.sin(yaw_rad)
+            vz = climb_rate
 
-            # Realistic Sensor Noise
-            est_x = round(true_x + float(np.random.normal(0, 0.03)), 3)
-            est_y = round(true_y + float(np.random.normal(0, 0.03)), 3)
-            est_z = round(true_z + float(np.random.normal(0, 0.02)), 3)
+            pos[0] += vx * dt
+            pos[1] += vy * dt
+            pos[2] += vz * dt
+            pos[2] = max(0.0, float(pos[2]))
 
-            confidence = round(float(np.random.uniform(0.95, 0.99)), 2)
-            proc_time_ms = round(float(np.random.uniform(0.3, 0.8)), 2)
+            # 4. Handle Mission Completion & Auto-Restart
+            if status == "MISSION_COMPLETED":
+                mission_restart_timer += 1
+                if mission_restart_timer > 90:  # Pause 3 seconds at landing, then restart mission
+                    self.engine.guidance.reset()
+                    pos = np.array([0.0, 0.0, 0.0], dtype=float)
+                    current_yaw = 0.0
+                    mission_restart_timer = 0
+                    print("[Mock SLAM] Mission completed! Restarting mission cycle...")
+
+            # 5. Inject Realistic Sensor Measurement Noise
+            est_x = round(float(pos[0]) + float(np.random.normal(0, 0.02)), 3)
+            est_y = round(float(pos[1]) + float(np.random.normal(0, 0.02)), 3)
+            est_z = round(float(pos[2]) + float(np.random.normal(0, 0.015)), 3)
+
+            confidence = round(float(np.random.uniform(0.96, 0.99)), 2)
+            proc_time_ms = round(float(np.random.uniform(0.3, 0.6)), 2)
 
             p4_packet = {
                 "frame_id": self.frame_counter,
-                "timestamp": sim_time,
+                "timestamp": round(sim_time, 4),
                 "estimated_pose": {
                     "x": est_x,
                     "y": est_y,
                     "z": est_z,
-                    "roll": round(roll, 2),
-                    "pitch": round(pitch, 2),
-                    "yaw": round(yaw, 2),
+                    "roll": round(float(current_roll), 2),
+                    "pitch": round(float(current_pitch), 2),
+                    "yaw": round(float(current_yaw), 2),
                 },
                 "velocity": {
-                    "x": round(vx, 3),
-                    "y": round(vy, 3),
-                    "z": round(vz, 3),
+                    "x": round(float(vx), 3),
+                    "y": round(float(vy), 3),
+                    "z": round(float(vz), 3),
                 },
                 "tracking_state": "TRACKING_GOOD",
                 "confidence": confidence,
@@ -227,12 +254,7 @@ class NavigationStreamServer:
             }
 
             output_packet = dict(p4_packet)
-            output_packet["flight_command"] = {
-                "active_waypoint_idx": (int(elapsed // 10) % 5) + 1,
-                "active_waypoint_name": f"Waypoint_{(int(elapsed // 10) % 5) + 1}",
-                "distance_to_waypoint_m": round(max(0.5, 15.0 - (elapsed % 10) * 1.5), 1),
-                "desired_velocity_mps": round(speed, 2),
-            }
+            output_packet["flight_command"] = flight_cmd
             self.latest_output_packet = output_packet
 
             # Push to P4 Streamer Queue
@@ -260,10 +282,13 @@ class NavigationStreamServer:
 
             if self.frame_counter % 15 == 0:
                 p4_str = "[P4 Stream: OK]" if self.p4_connected else "[P4 Stream: Waiting]"
-                print(f"[Mock SLAM] Frame #{self.frame_counter:04d} | Pos: ({est_x:.2f}, {est_y:.2f}, {est_z:.2f}) m | R:{roll:+.0f}° P:{pitch:+.0f}° Y:{yaw:+.0f}° | {p4_str}")
+                wp_idx = flight_cmd.get("active_waypoint_idx", "-")
+                wp_name = flight_cmd.get("active_waypoint_name", "")
+                dist = flight_cmd.get("distance_to_waypoint_m", 0.0)
+                print(f"[Mock Mission] Frame #{self.frame_counter:04d} | Pos: ({est_x:.2f}, {est_y:.2f}, {est_z:.2f}) m | Target WP #{wp_idx} ({wp_name}) | Dist: {dist:.1f}m | {p4_str}")
 
-            dt = time.perf_counter() - t0
-            sleep_time = max(0.001, (1.0 / 30.0) - dt)
+            dt_actual = time.perf_counter() - t0
+            sleep_time = max(0.001, dt - dt_actual)
             await asyncio.sleep(sleep_time)
 
     async def register_telemetry_client(self, websocket):
@@ -415,7 +440,7 @@ class NavigationStreamServer:
         print(f"  • P2 Blender Video Stream: ws://{self.host}:{self.port}/ws/video")
         print(f"  • P4 Direct Stream Target: {self.p4_ws_url}")
         if self.enable_mock:
-            print(f"  • Standalone Mock Mode:    ENABLED (Simulating 3D flight)")
+            print(f"  • Mission Mock Mode:       ENABLED (Autonomous Waypoints)")
         if self.enable_view:
             print(f"  • Live Cockpit HUD Window: ENABLED")
         print("=" * 65 + "\n")
@@ -423,7 +448,7 @@ class NavigationStreamServer:
         # Start P4 background streaming task
         asyncio.create_task(self.p4_forwarder_loop())
 
-        # If mock mode enabled, start internal flight loop
+        # If mock mode enabled, start internal mission flight loop
         if self.enable_mock:
             asyncio.create_task(self.mock_simulation_loop())
 
@@ -439,7 +464,7 @@ def main():
     parser.add_argument("--p4-port", type=int, default=8004, help="P4 Navigation WebSocket port (default: 8004)")
     parser.add_argument("--waypoints", type=str, default=None, help="Path to mission waypoints JSON")
     parser.add_argument("--view", action="store_true", help="Enable Live Cockpit HUD Video Window")
-    parser.add_argument("--mock", action="store_true", help="Run in Mock Mode (Simulates 3D flight stream to P4 without Blender)")
+    parser.add_argument("--mock", action="store_true", help="Run in Mock Mode (Simulates 3D mission waypoint flight)")
 
     args = parser.parse_args()
 
