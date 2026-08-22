@@ -316,18 +316,17 @@ class BlenderDroneBridge:
             }
         }
 
-        # Ground Truth Packet for P4
+        # Ground Truth Packet for P4 (True 3D World Position)
         ground_truth = {
             "type": "ground_truth",
             "frame_id": self.frame_id,
             "timestamp": round(self.frame_id * DT, 4),
-            "position": {"x": round(rel_x, 4), "y": round(rel_y, 4), "z": round(rel_z, 4)},
-            "global_position": {"x": round(x, 4), "y": round(y, 4), "z": round(z, 4)},
+            "position": {"x": round(x, 4), "y": round(y, 4), "z": round(z, 4)},
             "orientation": {"roll": round(roll, 4), "pitch": round(pitch, 4), "yaw": round(yaw, 4)},
             "velocity": {"x": round(velocity[0], 4), "y": round(velocity[1], 4), "z": round(velocity[2], 4)}
         }
 
-        # Sensor Packet for P3
+        # Sensor Packet for P3 (True 3D World Position for world-anchoring)
         sensor_packet = {
             "frame_id": self.frame_id,
             "timestamp": round(self.frame_id * DT, 4),
@@ -337,9 +336,9 @@ class BlenderDroneBridge:
             },
             "imu": imu,
             "sim_position": {
-                "x": round(rel_x, 4),
-                "y": round(rel_y, 4),
-                "z": round(rel_z, 4)
+                "x": round(x, 4),
+                "y": round(y, 4),
+                "z": round(z, 4)
             }
         }
 

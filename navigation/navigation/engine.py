@@ -47,6 +47,7 @@ class NavigationEngine:
         self.guidance = WaypointNavigator(waypoints=waypoints)
 
         self.prev_timestamp: Optional[float] = None
+        self.initial_world_pos: Optional[np.ndarray] = None
 
     def load_waypoints(self, filepath: str) -> bool:
         """Loads mission waypoints from a JSON file."""
@@ -113,6 +114,20 @@ class NavigationEngine:
             dt = max(timestamp - self.prev_timestamp, 1e-4)
         self.prev_timestamp = timestamp
 
+        # Parse Simulation Position if provided
+        sim_pos = None
+        if "sim_position" in packet and packet["sim_position"] is not None:
+            sim_pos = self._parse_vector3(packet["sim_position"])
+
+        # Initialize World Origin on first frame
+        if self.initial_world_pos is None:
+            if sim_pos is not None:
+                self.initial_world_pos = sim_pos.copy()
+            else:
+                self.initial_world_pos = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+            self.ekf.p = self.initial_world_pos.copy()
+            self.guidance.anchor_to_world_origin(self.initial_world_pos)
+
         # 1. Parse IMU Data
         imu_data = packet.get("imu", {})
         accel = self._parse_vector3(imu_data.get("acceleration", imu_data.get("accel", [0.0, 0.0, 9.81])))
@@ -128,14 +143,6 @@ class NavigationEngine:
         # 4. Parse Camera Image
         camera_data = packet.get("camera", {})
         frame = self._load_camera_frame(camera_data)
-
-        # 4b. Parse Simulation Position (anchored to local origin)
-        sim_pos = None
-        if "sim_position" in packet and packet["sim_position"] is not None:
-            raw_sim_pos = self._parse_vector3(packet["sim_position"])
-            if not hasattr(self, "sim_origin") or self.sim_origin is None:
-                self.sim_origin = raw_sim_pos.copy()
-            sim_pos = raw_sim_pos - self.sim_origin
 
         tracking_state = "PREDICTING_IMU_ONLY"
         confidence = 0.50
@@ -154,9 +161,12 @@ class NavigationEngine:
                 unit_t = vo_res["relative_t"] / max(1e-6, np.linalg.norm(vo_res["relative_t"]))
                 self.scale_estimator.estimate_scale(unit_t, dt=dt)
 
+                # World VO Position = Initial World Spawn + Relative VO Translation
+                world_vo_pos = self.initial_world_pos + vo_res["position"]
+
                 # 7. EKF Measurement Update Step (Driven by VO)
                 ekf_state = self.ekf.update_vo_pose(
-                    pos_vo=vo_res["position"],
+                    pos_vo=world_vo_pos,
                     quat_vo=vo_res["orientation_quat"],
                     confidence=confidence
                 )

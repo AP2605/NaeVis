@@ -116,6 +116,18 @@ class WaypointNavigator:
         self.current_wp_idx = 0
         self.previous_wp_pos = None
         self.is_mission_active = len(self.waypoints) > 0
+        self._world_origin_set = False
+
+    def anchor_to_world_origin(self, origin: np.ndarray):
+        """Anchors relative waypoint offsets to initial 3D spawn world coordinates."""
+        if getattr(self, "_world_origin_set", False):
+            return
+        origin = np.array(origin, dtype=np.float64)
+        for wp in self.waypoints:
+            wp.x += origin[0]
+            wp.y += origin[1]
+            wp.z += origin[2]
+        self._world_origin_set = True
 
     def get_active_waypoint(self) -> Optional[Waypoint]:
         """Returns the current active target waypoint."""
