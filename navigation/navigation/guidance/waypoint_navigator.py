@@ -230,7 +230,20 @@ class WaypointNavigator:
         k_z = 1.0
         climb_rate_cmd = float(np.clip(k_z * dist_z, -self.max_climb_rate, self.max_climb_rate))
 
-        # 6. Cross-Track Error (CTE) Calculation
+        # 6. Aerodynamic 3D Attitude Calculation (Banked Coordinated Turns & Forward Pitch)
+        # Centripetal acceleration formula for banked turn: tan(phi) = - v * yaw_rate / g
+        yaw_rate_rad = np.radians(yaw_rate_cmd)
+        centripetal_acc = desired_speed * yaw_rate_rad
+        target_roll_rad = -np.arctan2(centripetal_acc, 9.81)
+        target_roll_deg = float(np.clip(np.degrees(target_roll_rad), -30.0, 30.0))
+
+        # Forward cruise pitch tilt (nose-down during forward flight, nose-up flare when braking)
+        if dist_xy < 1.0:
+            target_pitch_deg = 3.0  # Slight nose-up brake when approaching waypoint
+        else:
+            target_pitch_deg = float(np.clip(-2.5 * desired_speed, -22.0, 5.0))
+
+        # 7. Cross-Track Error (CTE) Calculation
         cte = 0.0
         if self.previous_wp_pos is not None:
             p_a = self.previous_wp_pos[:2]
@@ -250,6 +263,8 @@ class WaypointNavigator:
             "cross_track_error_m": round(cte, 3),
             "desired_velocity_mps": round(desired_speed, 2),
             "target_heading_yaw_deg": round(target_yaw_deg, 2),
+            "target_roll_deg": round(target_roll_deg, 2),
+            "target_pitch_deg": round(target_pitch_deg, 2),
             "commanded_yaw_rate_dps": round(yaw_rate_cmd, 2),
             "climb_rate_mps": round(climb_rate_cmd, 2),
             "mission_status": mission_status

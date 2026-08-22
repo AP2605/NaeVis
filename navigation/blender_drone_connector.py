@@ -229,11 +229,16 @@ class BlenderDroneBridge:
             "z": round(acc_linear[2] + 9.81, 4)
         }
 
-        gyro_reading = {
-            "x": 0.0,
-            "y": 0.0,
-            "z": 0.0
-        }
+        # Gyroscope angular velocity (rad/s)
+        if hasattr(self, "prev_euler") and self.prev_euler is not None:
+            gyro_reading = {
+                "x": round(math.radians(euler_deg[0] - self.prev_euler[0]) / dt, 4),
+                "y": round(math.radians(euler_deg[1] - self.prev_euler[1]) / dt, 4),
+                "z": round(math.radians(euler_deg[2] - self.prev_euler[2]) / dt, 4),
+            }
+        else:
+            gyro_reading = {"x": 0.0, "y": 0.0, "z": 0.0}
+        self.prev_euler = list(euler_deg)
 
         sensor_packet = {
             "frame_id": self.frame_id,
@@ -269,15 +274,36 @@ class BlenderDroneBridge:
 
         speed = float(flight_cmd.get("desired_velocity_mps", 0.0))
         target_yaw_deg = float(flight_cmd.get("target_heading_yaw_deg", 0.0))
+        target_roll_deg = float(flight_cmd.get("target_roll_deg", 0.0))
+        target_pitch_deg = float(flight_cmd.get("target_pitch_deg", 0.0))
         climb_rate = float(flight_cmd.get("climb_rate_mps", 0.0))
 
-        # Yaw rotation
+        # 1. Smooth Yaw Heading (Aerodynamic rate-limited turning)
         target_yaw_rad = math.radians(target_yaw_deg)
         current_yaw_rad = drone.rotation_euler.z
         yaw_diff = (target_yaw_rad - current_yaw_rad + math.pi) % (2.0 * math.pi) - math.pi
-        drone.rotation_euler.z += yaw_diff * 0.15
 
-        # Translation
+        # 2. Banked Coordinated Turn (Dynamic Roll Inward)
+        if abs(target_roll_deg) < 1e-3 and abs(yaw_diff) > 0.01:
+            calc_bank = math.degrees(-math.atan2(speed * yaw_diff * 2.2, 9.81))
+            target_roll_deg = max(-28.0, min(28.0, calc_bank))
+
+        # 3. Dynamic Forward Pitch & Climb Attitude
+        if abs(target_pitch_deg) < 1e-3:
+            if speed > 0.1:
+                target_pitch_deg = max(-20.0, min(5.0, -2.5 * speed))
+            if abs(climb_rate) > 0.2:
+                target_pitch_deg += max(-5.0, min(5.0, -climb_rate * 2.0))
+
+        target_roll_rad = math.radians(target_roll_deg)
+        target_pitch_rad = math.radians(target_pitch_deg)
+
+        # 4. Apply 6-DOF Physical Inertial Smoothing (Damped Euler Rotation)
+        drone.rotation_euler.z += yaw_diff * 0.12                                    # Smooth Yaw
+        drone.rotation_euler.x += (target_roll_rad - drone.rotation_euler.x) * 0.15  # Banked Roll
+        drone.rotation_euler.y += (target_pitch_rad - drone.rotation_euler.y) * 0.15 # Forward Pitch
+
+        # 5. Advance 3D World Position
         active_yaw = drone.rotation_euler.z
         vx = speed * math.cos(active_yaw)
         vy = speed * math.sin(active_yaw)
