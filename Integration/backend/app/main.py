@@ -35,10 +35,13 @@ logger = logging.getLogger("sih_navis")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application lifecycle and optional in-process P3 navigation listener."""
+    """Manage application lifecycle and optional in-process P3 & P2 listeners."""
     nav_server_task = None
     nav_server_instance = None
+    sim_server_task = None
+    sim_server_instance = None
 
+    # 1. Dedicated P3 Navigation Server (Port 8004)
     if settings.AUTO_START_NAV_SERVER:
         try:
             from app.websocket.navigation_server import create_nav_server_async
@@ -55,14 +58,41 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("Could not auto-start P3 Navigation Server on port %d: %s", settings.NAV_WS_PORT, exc)
 
+    # 2. Dedicated P2 Simulation Ground Truth Server (Port 8005)
+    if settings.AUTO_START_P2_SERVER:
+        try:
+            from app.websocket.simulation_server import create_sim_server_async
+            sim_server_instance = await create_sim_server_async(
+                host=settings.P2_WS_HOST, port=settings.P2_WS_PORT
+            )
+            sim_server_task = asyncio.create_task(sim_server_instance.serve())
+            logger.info(
+                "Started dedicated P2 Simulation Telemetry WebSocket Server on ws://%s:%d%s",
+                settings.P2_WS_HOST,
+                settings.P2_WS_PORT,
+                settings.P2_WS_PATH,
+            )
+        except Exception as exc:
+            logger.warning("Could not auto-start P2 Simulation Server on port %d: %s", settings.P2_WS_PORT, exc)
+
     yield
 
+    # Graceful Shutdown
     if nav_server_instance is not None:
         nav_server_instance.should_exit = True
     if nav_server_task is not None:
         nav_server_task.cancel()
         try:
             await nav_server_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    if sim_server_instance is not None:
+        sim_server_instance.should_exit = True
+    if sim_server_task is not None:
+        sim_server_task.cancel()
+        try:
+            await sim_server_task
         except (asyncio.CancelledError, Exception):
             pass
 

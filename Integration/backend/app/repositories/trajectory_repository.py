@@ -23,13 +23,19 @@ class TrajectoryRepository:
         self._sync_pairs: deque[TrajectorySyncPair] = deque(maxlen=max_points)
 
     def record_ground_truth(self, pt: TrajectoryPoint, mission_id: str | None = None) -> None:
-        """Store ground truth trajectory sample."""
-        self._gt_buffer.append(pt)
+        """Store ground truth trajectory sample with duplicate protection."""
+        if self._gt_buffer and pt.frame_id is not None and self._gt_buffer[-1].frame_id == pt.frame_id:
+            self._gt_buffer[-1] = pt
+        else:
+            self._gt_buffer.append(pt)
         self._match_and_persist(pt, is_gt=True, mission_id=mission_id)
 
     def record_estimated(self, pt: TrajectoryPoint, mission_id: str | None = None) -> None:
-        """Store estimated pose trajectory sample."""
-        self._est_buffer.append(pt)
+        """Store estimated pose trajectory sample with duplicate protection."""
+        if self._est_buffer and pt.frame_id is not None and self._est_buffer[-1].frame_id == pt.frame_id:
+            self._est_buffer[-1] = pt
+        else:
+            self._est_buffer.append(pt)
         self._match_and_persist(pt, is_gt=False, mission_id=mission_id)
 
     def _match_and_persist(self, pt: TrajectoryPoint, is_gt: bool, mission_id: str | None) -> None:
@@ -60,8 +66,18 @@ class TrajectoryRepository:
         self, limit: int = 500, mission_id: str | None = None
     ) -> TrajectoryResponse:
         """Return synchronized trajectory points up to limit."""
-        gt_list = sorted(self._gt_buffer, key=lambda p: (p.frame_id or 0, p.timestamp))[-limit:]
-        est_list = sorted(self._est_buffer, key=lambda p: (p.frame_id or 0, p.timestamp))[-limit:]
+        gt_dict: dict[Any, TrajectoryPoint] = {}
+        for p in self._gt_buffer:
+            k = p.frame_id if p.frame_id is not None else p.timestamp
+            gt_dict[k] = p
+        gt_list = sorted(gt_dict.values(), key=lambda p: (p.frame_id or 0, p.timestamp))[-limit:]
+
+        est_dict: dict[Any, TrajectoryPoint] = {}
+        for p in self._est_buffer:
+            k = p.frame_id if p.frame_id is not None else p.timestamp
+            est_dict[k] = p
+        est_list = sorted(est_dict.values(), key=lambda p: (p.frame_id or 0, p.timestamp))[-limit:]
+
         return TrajectoryResponse(
             mission_id=mission_id,
             ground_truth=gt_list,
@@ -70,9 +86,13 @@ class TrajectoryRepository:
         )
 
     def get_synchronized_pairs(self, limit: int = 500) -> list[TrajectorySyncPair]:
-        """Return matched synchronized pairs having both GT and EST sorted chronologically."""
+        """Return matched synchronized pairs having both GT and EST sorted chronologically without duplicates."""
         valid_pairs = [p for p in self._sync_pairs if p.ground_truth is not None and p.estimated is not None]
-        sorted_pairs = sorted(valid_pairs, key=lambda p: (p.frame_id or 0, p.timestamp or 0.0))
+        unique_pairs: dict[int, TrajectorySyncPair] = {}
+        for p in valid_pairs:
+            fid = p.frame_id if p.frame_id is not None else int((p.timestamp or 0.0) * 1000)
+            unique_pairs[fid] = p
+        sorted_pairs = sorted(unique_pairs.values(), key=lambda p: (p.frame_id or 0, p.timestamp or 0.0))
         return sorted_pairs[-limit:]
 
     def clear(self) -> None:

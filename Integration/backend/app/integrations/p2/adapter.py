@@ -44,6 +44,24 @@ def normalize_p2_ground_truth(raw_data: Any, is_real: bool = False) -> Simulatio
     else:
         raise ValueError(f"Expected dictionary or SimulationGroundTruthPacket, got {type(raw_data).__name__}")
 
+    # 1. Extract nested ground_truth wrapper dictionary if present
+    if "ground_truth" in packet_dict and isinstance(packet_dict["ground_truth"], dict):
+        gt = packet_dict.pop("ground_truth")
+        if "position" in gt:
+            packet_dict["position"] = gt["position"]
+        elif "x" in gt and "y" in gt and "z" in gt:
+            packet_dict["position"] = {"x": gt.get("x"), "y": gt.get("y"), "z": gt.get("z")}
+        if "orientation" in gt:
+            packet_dict["orientation"] = gt["orientation"]
+        elif "roll" in gt or "pitch" in gt or "yaw" in gt:
+            packet_dict["orientation"] = {
+                "roll": gt.get("roll", 0.0),
+                "pitch": gt.get("pitch", 0.0),
+                "yaw": gt.get("yaw", 0.0),
+            }
+        if "velocity" in gt and "velocity" not in packet_dict:
+            packet_dict["velocity"] = gt["velocity"]
+
     # Validate timestamp
     ts = packet_dict.get("timestamp", 0.0)
     if ts is not None:
@@ -114,6 +132,30 @@ def normalize_p2_ground_truth(raw_data: Any, is_real: bool = False) -> Simulatio
             "roll": float(att[0]),
             "pitch": float(att[1]),
             "yaw": float(att[2]),
+        }
+
+    # Normalize velocity if present
+    vel = packet_dict.get("velocity")
+    if vel is not None:
+        if isinstance(vel, dict):
+            if "x" in vel and "y" in vel and "z" in vel:
+                _check_finite(vel["x"], "velocity.x")
+                _check_finite(vel["y"], "velocity.y")
+                _check_finite(vel["z"], "velocity.z")
+            else:
+                raise ValueError("Velocity dictionary missing 'x', 'y', or 'z'")
+        elif isinstance(vel, (list, tuple)) and len(vel) >= 3:
+            _check_finite(vel[0], "velocity[0]")
+            _check_finite(vel[1], "velocity[1]")
+            _check_finite(vel[2], "velocity[2]")
+            packet_dict["velocity"] = {"x": float(vel[0]), "y": float(vel[1]), "z": float(vel[2])}
+        else:
+            raise ValueError("Velocity must be a 3D dictionary {x, y, z} or list [vx, vy, vz]")
+    elif "vx" in packet_dict and "vy" in packet_dict and "vz" in packet_dict:
+        packet_dict["velocity"] = {
+            "x": float(packet_dict.pop("vx")),
+            "y": float(packet_dict.pop("vy")),
+            "z": float(packet_dict.pop("vz")),
         }
 
     # Validate LiDAR if present

@@ -184,7 +184,14 @@ export default function DashboardPage() {
         pitch: navigation.estimated_pose.pitch ?? 0,
         yaw: navigation.estimated_pose.yaw ?? 0,
       };
-      setLiveEstimated((prev) => [...prev.slice(-499), pt]);
+      setLiveEstimated((prev) => {
+        if (prev.length > 0 && prev[prev.length - 1].frame_id === pt.frame_id && pt.frame_id !== 0) {
+          const updated = [...prev];
+          updated[updated.length - 1] = pt;
+          return updated;
+        }
+        return [...prev.slice(-499), pt];
+      });
     }
   }, [navigation?.frame_id, navigation?.timestamp]);
 
@@ -201,7 +208,14 @@ export default function DashboardPage() {
         pitch: groundTruth.orientation?.pitch ?? 0,
         yaw: groundTruth.orientation?.yaw ?? 0,
       };
-      setLiveGroundTruth((prev) => [...prev.slice(-499), pt]);
+      setLiveGroundTruth((prev) => {
+        if (prev.length > 0 && prev[prev.length - 1].frame_id === pt.frame_id && pt.frame_id !== 0) {
+          const updated = [...prev];
+          updated[updated.length - 1] = pt;
+          return updated;
+        }
+        return [...prev.slice(-499), pt];
+      });
     }
   }, [groundTruth?.frame_id, groundTruth?.timestamp]);
 

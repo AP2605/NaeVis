@@ -83,7 +83,8 @@ class FrameSynchronizer:
                 self._p1_fps = 0.9 * self._p1_fps + 0.1 * (1.0 / dt)
         self._last_p1_time = now
         self._p1_count += 1
-        self._latest_p1 = packet
+        if self._latest_p1 is None or packet.frame_id >= self._latest_p1.frame_id:
+            self._latest_p1 = packet
         if is_real:
             self._p1_is_real = True
 
@@ -116,11 +117,17 @@ class FrameSynchronizer:
                 self._p2_fps = 0.9 * self._p2_fps + 0.1 * (1.0 / dt)
         self._last_p2_time = now
         self._p2_count += 1
-        self._latest_p2 = packet
+        frame_id = packet.frame_id if packet.frame_id is not None else self._p2_count
+
+        if (
+            self._latest_p2 is None
+            or self._latest_p2.frame_id is None
+            or frame_id >= self._latest_p2.frame_id
+        ):
+            self._latest_p2 = packet
         if is_real:
             self._p2_is_real = True
 
-        frame_id = packet.frame_id if packet.frame_id is not None else self._p2_count
         frame = self._get_or_create_frame(frame_id, packet.timestamp)
         frame.ground_truth = packet
         if packet.camera is not None and packet.camera.image_path:
@@ -153,7 +160,9 @@ class FrameSynchronizer:
                 self._p3_fps = 0.9 * self._p3_fps + 0.1 * (1.0 / dt)
         self._last_p3_time = now
         self._p3_count += 1
-        self._latest_p3 = packet
+
+        if self._latest_p3 is None or packet.frame_id >= self._latest_p3.frame_id:
+            self._latest_p3 = packet
         if is_real:
             self._p3_is_real = True
 

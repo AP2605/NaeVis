@@ -51,6 +51,12 @@ class Settings:
     NAV_WS_PATH: str = os.getenv("P4_NAV_WS_PATH", "/ws/navigation")
     AUTO_START_NAV_SERVER: bool = os.getenv("AUTO_START_NAV_SERVER", "true").lower() in ("true", "1", "yes")
 
+    # P2 Dedicated Simulation Ground Truth Telemetry WebSocket Listener Settings (Port 8005)
+    P2_WS_HOST: str = os.getenv("P4_P2_WS_HOST", "0.0.0.0")
+    P2_WS_PORT: int = int(os.getenv("P4_P2_WS_PORT", "8005"))
+    P2_WS_PATH: str = os.getenv("P4_P2_WS_PATH", "/ws/telemetry")
+    AUTO_START_P2_SERVER: bool = os.getenv("AUTO_START_P2_SERVER", "true").lower() in ("true", "1", "yes")
+
     # Logging level
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
