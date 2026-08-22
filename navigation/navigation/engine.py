@@ -161,8 +161,11 @@ class NavigationEngine:
                 unit_t = vo_res["relative_t"] / max(1e-6, np.linalg.norm(vo_res["relative_t"]))
                 self.scale_estimator.estimate_scale(unit_t, dt=dt)
 
-                # World VO Position = Initial World Spawn + Relative VO Translation
-                world_vo_pos = self.initial_world_pos + vo_res["position"]
+                # Transform Camera Optical Frame [xc, yc, zc] to Body Navigation Frame [xb, yb, zb]
+                # Optical: +Z fwd, +X right, +Y down -> Body: +X fwd (+Z), +Y left (-X), +Z up (-Y)
+                raw_vo = vo_res["position"]
+                body_vo_t = np.array([raw_vo[2], -raw_vo[0], -raw_vo[1]], dtype=np.float64)
+                world_vo_pos = self.initial_world_pos + body_vo_t
 
                 # 7. EKF Measurement Update Step (Driven by VO)
                 ekf_state = self.ekf.update_vo_pose(
@@ -170,6 +173,10 @@ class NavigationEngine:
                     quat_vo=vo_res["orientation_quat"],
                     confidence=confidence
                 )
+            elif sim_pos is not None:
+                ekf_state["position"] = sim_pos
+                tracking_state = "SIMULATION_TRACKING"
+                confidence = 0.98
         elif sim_pos is not None:
             ekf_state["position"] = sim_pos
             tracking_state = "SIMULATION_TRACKING"

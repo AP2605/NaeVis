@@ -53,7 +53,8 @@ class NavigationStreamServer:
         p4_video_port: int = 8000,
         waypoints_file: Optional[str] = None,
         enable_view: bool = False,
-        enable_mock: bool = False
+        enable_mock: bool = False,
+        enable_straight: bool = False
     ):
         self.host = host
         self.port = port
@@ -63,6 +64,7 @@ class NavigationStreamServer:
         self.p4_ws_url = f"ws://{p4_ip}:{p4_port}/ws/navigation"
         self.enable_view = enable_view
         self.enable_mock = enable_mock
+        self.enable_straight = enable_straight
         self.engine = NavigationEngine()
 
         if waypoints_file and os.path.exists(waypoints_file):
@@ -367,6 +369,32 @@ class NavigationStreamServer:
 
                     # Build exact P4 JSON payload matching to_see.md specification
                     flight_cmd = output_packet.get("flight_command", {})
+                    if self.enable_straight:
+                        if self.frame_counter < 60:
+                            flight_cmd = {
+                                "desired_velocity_mps": 0.0,
+                                "target_heading_yaw_deg": 0.0,
+                                "target_roll_deg": 0.0,
+                                "target_pitch_deg": 0.0,
+                                "climb_rate_mps": 1.5,
+                                "active_waypoint_idx": 1,
+                                "active_waypoint_name": "Takeoff Climb",
+                                "distance_to_waypoint_m": max(0.0, 5.0 - (self.frame_counter * 0.08)),
+                                "mission_status": "TAKEOFF"
+                            }
+                        else:
+                            flight_cmd = {
+                                "desired_velocity_mps": 3.0,
+                                "target_heading_yaw_deg": 0.0,
+                                "target_roll_deg": 0.0,
+                                "target_pitch_deg": -5.0,
+                                "climb_rate_mps": 0.0,
+                                "active_waypoint_idx": 2,
+                                "active_waypoint_name": "Straight Flight Test",
+                                "distance_to_waypoint_m": 100.0,
+                                "mission_status": "CRUISING_STRAIGHT"
+                            }
+
                     p4_packet = {
                         "frame_id": int(output_packet["frame_id"]),
                         "timestamp": float(output_packet["timestamp"]),
@@ -500,6 +528,7 @@ def main():
     parser.add_argument("--waypoints", type=str, default=None, help="Path to mission waypoints JSON")
     parser.add_argument("--view", action="store_true", help="Enable Live Cockpit HUD Video Window")
     parser.add_argument("--mock", action="store_true", help="Run in Mock Mode (Simulates 3D mission waypoint flight)")
+    parser.add_argument("--straight", action="store_true", help="Run straight flight test mode for SLAM verification")
 
     args = parser.parse_args()
 
@@ -514,7 +543,8 @@ def main():
         p4_video_port=args.p4_video_port,
         waypoints_file=wp_path,
         enable_view=args.view,
-        enable_mock=args.mock
+        enable_mock=args.mock,
+        enable_straight=args.straight
     )
     try:
         asyncio.run(server.start())
